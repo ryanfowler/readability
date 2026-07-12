@@ -1,0 +1,15 @@
+name: CI
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {submodules: recursive}
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.23.x'}
+      - run: test "$(git -C tests/readability-js rev-parse HEAD)" = 08be6b4bdb204dd333c9b7a0cfbc0e730b257252
+      - run: test -z "$(gofmt -l $(git ls-files '*.go'))"
+      - run: go vet ./...
+      - run: go test ./...
+      - run: go test -race ./...
