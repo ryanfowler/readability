@@ -30,6 +30,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"golang.org/x/net/html"
 	"golang.org/x/net/html/atom"
@@ -1729,23 +1730,65 @@ func (r *engine) isPhrasingContent(n *html.Node) bool {
 }
 
 func (r *engine) isWhitespace(n *html.Node) bool {
-	return (n.Type == html.TextNode && len(strings.TrimSpace(textContent(n))) == 0) ||
+	return (n.Type == html.TextNode && len(strings.TrimSpace(n.Data)) == 0) ||
 		(n.Type == html.ElementNode && tagName(n) == "BR")
+}
+
+// normalizeWhitespaceRuns is equivalent to normalize.ReplaceAllString(s, " ").
+// Keeping this hot path out of regexp avoids the regexp machine and its output
+// allocation when (as is usual) the text contains no repeated whitespace.
+func normalizeWhitespaceRuns(s string) string {
+	start := -1
+	for i := 0; i < len(s); i++ {
+		if isASCIIWhitespace(s[i]) && i+1 < len(s) && isASCIIWhitespace(s[i+1]) {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return s
+	}
+
+	var b strings.Builder
+	b.Grow(len(s))
+	b.WriteString(s[:start])
+	for i := start; i < len(s); {
+		if !isASCIIWhitespace(s[i]) {
+			b.WriteByte(s[i])
+			i++
+			continue
+		}
+		j := i + 1
+		for j < len(s) && isASCIIWhitespace(s[j]) {
+			j++
+		}
+		if j-i >= 2 {
+			b.WriteByte(' ')
+		} else {
+			b.WriteByte(s[i])
+		}
+		i = j
+	}
+	return b.String()
+}
+
+func isASCIIWhitespace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f'
 }
 
 // Get the inner text of a node - cross browser compatibly.
 // This also strips out any excess whitespace to be found ('normalizeSpaces', defaults to true).
 func (r *engine) getInnerText(e *html.Node, normalizeSpaces bool) string {
-	var textContent = strings.TrimSpace(textContent(e))
+	text := strings.TrimSpace(textContent(e))
 	if normalizeSpaces {
-		return normalize.ReplaceAllString(textContent, " ")
+		return normalizeWhitespaceRuns(text)
 	}
-	return textContent
+	return text
 }
 
 // Get the number of times a string s appears in the node e.
 func (r *engine) getCharCount(e *html.Node, s string) int {
-	return len(strings.Split(r.getInnerText(e, true), s)) - 1
+	return strings.Count(r.getInnerText(e, true), s)
 }
 
 // Remove the style attribute on every e and under.
@@ -1775,24 +1818,57 @@ func (r *engine) cleanStyles(e *html.Node) {
 // Get the density of links as a percentage of the content
 // This is the amount of text that is inside a link divided by the total text in the node.
 func (r *engine) getLinkDensity(element *html.Node) float64 {
-	var textLength = len([]rune(r.getInnerText(element, true)))
+	textLength := normalizedTextRuneLen(element)
 	if textLength == 0 {
 		return 0
 	}
 
-	var linkLength = 0.0
-
-	// XXX implement _reduceNodeList?
+	var linkLength float64
 	for _, linkNode := range elementsByTagName(element, "a") {
-		var href = getAttribute(linkNode, "href")
-		var coefficient = 1.0
+		href := getAttribute(linkNode, "href")
+		coefficient := 1.0
 		if href != "" && hashUrl.MatchString(href) {
 			coefficient = 0.3
 		}
-		linkLength += float64(len([]rune(r.getInnerText(linkNode, true)))) * coefficient
+		linkLength += float64(normalizedTextRuneLen(linkNode)) * coefficient
 	}
 
 	return linkLength / float64(textLength)
+}
+
+// normalizedTextRuneLen computes the length used by getLinkDensity without
+// materializing textContent (which can otherwise make nested candidates use
+// quadratic amounts of temporary memory).
+func normalizedTextRuneLen(element *html.Node) int {
+	length, pending, asciiRun := 0, 0, 0
+	started := false
+	walkNodes(element, func(n *html.Node) bool {
+		if n.Type != html.TextNode {
+			return false
+		}
+		for _, c := range n.Data {
+			if unicode.IsSpace(c) {
+				if c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' {
+					if asciiRun == 0 {
+						pending++
+					}
+					asciiRun++
+				} else {
+					pending++
+					asciiRun = 0
+				}
+				continue
+			}
+			if started {
+				length += pending
+			}
+			pending, asciiRun = 0, 0
+			length++
+			started = true
+		}
+		return false
+	})
+	return length
 }
 
 // Get an elements class/id weight. Uses regular expressions to tell if this
