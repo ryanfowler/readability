@@ -1,7 +1,6 @@
 package readability
 
 import (
-	"bytes"
 	"slices"
 
 	"golang.org/x/net/html"
@@ -20,8 +19,8 @@ func delete[T any](idx int, a []*T) []*T {
 	return a
 }
 
-func insert(newNode *Node, idx int, nodes []*Node) []*Node {
-	nodes = append(nodes[:idx], append([]*Node{newNode}, nodes[idx:]...)...)
+func insert(newNode *html.Node, idx int, nodes []*html.Node) []*html.Node {
+	nodes = append(nodes[:idx], append([]*html.Node{newNode}, nodes[idx:]...)...)
 	return nodes
 }
 
@@ -50,22 +49,4 @@ func attr(n *html.Node, attrName string) string {
 		}
 	}
 	return ""
-}
-
-func textContent(n *html.Node) string {
-	var buf bytes.Buffer
-
-	var getText func(*html.Node)
-	getText = func(n *html.Node) {
-		if n.Type == html.TextNode {
-			buf.WriteString(n.Data)
-		}
-
-		for child := n.FirstChild; child != nil; child = child.NextSibling {
-			getText(child)
-		}
-	}
-	getText(n)
-
-	return buf.String()
 }
