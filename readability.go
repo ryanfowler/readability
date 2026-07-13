@@ -1708,9 +1708,45 @@ func (r *engine) hasSingleTagInsideElement(element *html.Node, tag string) bool 
 }
 
 func (r *engine) isElementWithoutContent(n *html.Node) bool {
-	return n.Type == html.ElementNode &&
-		len([]rune(strings.TrimSpace(textContent(n)))) == 0 &&
-		(len(elementChildren(n)) == 0 || len(elementChildren(n)) == len(elementsByTagName(n, "br"))+len(elementsByTagName(n, "hr")))
+	if n.Type != html.ElementNode || hasNonWhitespaceText(n) {
+		return false
+	}
+
+	// Preserve Readability's slightly unusual comparison of direct element
+	// children with all descendant BR/HR elements, but avoid constructing three
+	// node lists (and repeatedly materializing the subtree's text) to do it.
+	directElements, breaks := 0, 0
+	for child := n.FirstChild; child != nil; child = child.NextSibling {
+		if child.Type == html.ElementNode {
+			directElements++
+		}
+	}
+	walkNodes(n, func(node *html.Node) bool {
+		if node != n && node.Type == html.ElementNode && (node.Data == "br" || node.Data == "hr") {
+			breaks++
+		}
+		return false
+	})
+	return directElements == 0 || directElements == breaks
+}
+
+// hasNonWhitespaceText answers the common emptiness question without building
+// the complete textContent string. On large nested documents that string was
+// rebuilt for every DIV/SECTION/heading ancestor, causing quadratic allocation.
+func hasNonWhitespaceText(n *html.Node) bool {
+	var visit func(*html.Node) bool
+	visit = func(node *html.Node) bool {
+		if node.Type == html.TextNode && strings.TrimSpace(node.Data) != "" {
+			return true
+		}
+		for child := node.FirstChild; child != nil; child = child.NextSibling {
+			if visit(child) {
+				return true
+			}
+		}
+		return false
+	}
+	return visit(n)
 }
 
 // Determine whether element has any children block level elements.
