@@ -890,7 +890,12 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 
 		for n != nil {
 
-			slog.Debug("elementsToScore", "nodeText", textContent(n))
+			// Computing textContent for every node is quadratic for deeply nested
+			// documents. Debug arguments are evaluated eagerly, so don't build them
+			// unless debugging was explicitly requested.
+			if r.options.debug {
+				slog.Debug("elementsToScore", "nodeText", textContent(n))
+			}
 
 			if tagName(n) == "HTML" {
 				r.articleLang = getAttribute(n, "lang")
@@ -1055,7 +1060,9 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 					scoreDivider = level * 3
 				}
 				r.data(ancestor).contentScore += contentScore / float64(scoreDivider)
-				slog.Debug("assigned score", "ancestor", textContent(ancestor), "score", r.data(ancestor).contentScore)
+				if r.options.debug {
+					slog.Debug("assigned score", "ancestor", textContent(ancestor), "score", r.data(ancestor).contentScore)
+				}
 			}
 		}
 
@@ -1071,7 +1078,9 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 			var candidateScore = r.data(candidate).contentScore * (1 - r.getLinkDensity(candidate))
 			r.data(candidate).contentScore = candidateScore
 
-			slog.Debug("grabArticle", "candidate", textContent(candidate), "scaled-score", candidateScore)
+			if r.options.debug {
+				slog.Debug("grabArticle", "candidate", textContent(candidate), "scaled-score", candidateScore)
+			}
 
 			for t := 0; t < r.options.nbTopCandidates; t++ {
 				var aTopCandidate *html.Node
@@ -1204,7 +1213,9 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 			var sibling = siblings[s]
 			var append = false
 
-			slog.Debug("Looking at sibling node:", "sibling", textContent(sibling), "score", r.nodeState[sibling])
+			if r.options.debug {
+				slog.Debug("Looking at sibling node:", "sibling", textContent(sibling), "score", r.nodeState[sibling])
+			}
 
 			if sibling == topCandidate {
 				append = true
@@ -1232,11 +1243,15 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 			}
 
 			if append {
-				slog.Debug("appending", "node", textContent(sibling))
+				if r.options.debug {
+					slog.Debug("appending", "node", textContent(sibling))
+				}
 				if !slices.Contains(alterToDiveExceptions, nodeName(sibling)) {
 					// We have a node that isn't a common block level element, like a form or td tag.
 					// Turn it into a div so it doesn't get filtered out later by accident.
-					slog.Debug("altering", "node", textContent(sibling))
+					if r.options.debug {
+						slog.Debug("altering", "node", textContent(sibling))
+					}
 
 					sibling = r.setNodeTag(sibling, "DIV")
 				}
@@ -1254,10 +1269,14 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 			}
 		}
 
-		slog.Debug("Article content pre-prep", "innerHTML", innerHTML(articleContent))
+		if r.options.debug {
+			slog.Debug("Article content pre-prep", "innerHTML", innerHTML(articleContent))
+		}
 		// So we have all of the content that we need. Now we clean it up for presentation.
 		r.prepArticle(articleContent)
-		slog.Debug("Article content post-prep", "innerHTML", innerHTML(articleContent))
+		if r.options.debug {
+			slog.Debug("Article content post-prep", "innerHTML", innerHTML(articleContent))
+		}
 
 		if neededToCreateTopCandidate {
 			// We already created a fake div thing, and there wouldn't have been any siblings left
@@ -1276,7 +1295,9 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 			appendChild(articleContent, div)
 		}
 
-		slog.Debug("Article content after paging", "innerHTML", innerHTML(articleContent))
+		if r.options.debug {
+			slog.Debug("Article content after paging", "innerHTML", innerHTML(articleContent))
+		}
 
 		var parseSuccessful = true
 
@@ -2259,7 +2280,9 @@ func (r *engine) Parse() (*engineResult, error) {
 		return nil, fmt.Errorf("cannot grab article")
 	}
 
-	slog.Debug("grabbed", "articleContent.innerHTML", innerHTML(articleContent))
+	if r.options.debug {
+		slog.Debug("grabbed", "articleContent.innerHTML", innerHTML(articleContent))
+	}
 
 	r.postProcessContent(articleContent)
 

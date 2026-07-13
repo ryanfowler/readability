@@ -88,6 +88,7 @@ func NewDocument(input string) (*Document, error) {
 	// substrings so <header> and text/attributes containing "<body" do not count.
 	var hasHTML, hasHead, hasBody bool
 	tokenizer := html.NewTokenizer(strings.NewReader(input))
+scanTags:
 	for {
 		tokenType := tokenizer.Next()
 		if tokenType == html.ErrorToken {
@@ -96,14 +97,17 @@ func NewDocument(input string) (*Document, error) {
 		if tokenType != html.StartTagToken && tokenType != html.SelfClosingTagToken {
 			continue
 		}
-		name, _ := tokenizer.TagName()
-		switch strings.ToLower(string(name)) {
+		name, _ := tokenizer.TagName() // TagName is normalized to lower case.
+		switch string(name) {
 		case "html":
 			hasHTML = true
 		case "head":
 			hasHead = true
 		case "body":
 			hasBody = true
+			// A body tag settles the only question this preliminary scan is
+			// needed for. Avoid tokenizing the (usually much larger) body twice.
+			break scanTags
 		}
 	}
 	doc, err := html.Parse(strings.NewReader(input))
