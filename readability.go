@@ -31,6 +31,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"golang.org/x/net/html"
 	"golang.org/x/net/html/atom"
@@ -704,11 +705,11 @@ func (r *engine) prepArticle(articleContent *html.Node) {
 
 	// Remove extra paragraphs
 	r.removeNodes(r.getAllNodesWithTag(articleContent, "p"), func(paragraph *html.Node) bool {
-		var imgCount = len(elementsByTagName(paragraph, "img"))
-		var embedCount = len(elementsByTagName(paragraph, "embed"))
-		var objectCount = len(elementsByTagName(paragraph, "object"))
+		var imgCount = countElementsByTagName(paragraph, "img")
+		var embedCount = countElementsByTagName(paragraph, "embed")
+		var objectCount = countElementsByTagName(paragraph, "object")
 		// At this point, nasty iframes have been removed, only remain embedded video ones.
-		var iframeCount = len(elementsByTagName(paragraph, "iframe"))
+		var iframeCount = countElementsByTagName(paragraph, "iframe")
 		var totalCount = imgCount + embedCount + objectCount + iframeCount
 		return totalCount == 0 && r.getInnerText(paragraph, false) == ""
 	})
@@ -1882,17 +1883,27 @@ func normalizedTextRuneLen(element *html.Node) int {
 		if n.Type != html.TextNode {
 			return false
 		}
-		for _, c := range n.Data {
-			if unicode.IsSpace(c) {
-				if c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' {
-					if asciiRun == 0 {
-						pending++
-					}
-					asciiRun++
-				} else {
+		s := n.Data
+		for i := 0; i < len(s); {
+			// Article text is overwhelmingly ASCII. Avoid range's UTF-8 decoder
+			// and unicode.IsSpace's table lookup on that common path.
+			c := rune(s[i])
+			size := 1
+			if s[i] >= utf8.RuneSelf {
+				c, size = utf8.DecodeRuneInString(s[i:])
+			}
+			i += size
+			space := c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f'
+			if space {
+				if asciiRun == 0 {
 					pending++
-					asciiRun = 0
 				}
+				asciiRun++
+				continue
+			}
+			if c >= utf8.RuneSelf && unicode.IsSpace(c) {
+				pending++
+				asciiRun = 0
 				continue
 			}
 			if started {
@@ -1914,24 +1925,23 @@ func (r *engine) getClassWeight(e *html.Node) float64 {
 		return 0
 	}
 
-	var weight = 0
-
-	// Look for a special classname
-	if className(e) != "" {
-		if negative.MatchString(className(e)) {
+	weight := 0
+	// Attribute lookup is linear. Keep the values instead of looking each one
+	// up for the empty check and for both regular expressions.
+	class, id := className(e), nodeID(e)
+	if class != "" {
+		if negative.MatchString(class) {
 			weight -= 25
 		}
-		if positive.MatchString(className(e)) {
+		if positive.MatchString(class) {
 			weight += 25
 		}
 	}
-
-	// Look for a special ID
-	if nodeID(e) != "" {
-		if negative.MatchString(nodeID(e)) {
+	if id != "" {
+		if negative.MatchString(id) {
 			weight -= 25
 		}
-		if positive.MatchString(nodeID(e)) {
+		if positive.MatchString(id) {
 			weight += 25
 		}
 	}
@@ -2228,10 +2238,10 @@ func (r *engine) cleanConditionally(e *html.Node, tag string) {
 			// If there are not very many commas, and the number of
 			// non-paragraph elements is more than paragraphs or other
 			// ominous signs, remove the element.
-			var p = len(elementsByTagName(n, "p"))
-			var img = len(elementsByTagName(n, "img"))
-			var li = len(elementsByTagName(n, "li")) - 100
-			var input = len(elementsByTagName(n, "input"))
+			var p = countElementsByTagName(n, "p")
+			var img = countElementsByTagName(n, "img")
+			var li = countElementsByTagName(n, "li") - 100
+			var input = countElementsByTagName(n, "input")
 			var headingDensity = r.getTextDensity(n, "h1", "h2", "h3", "h4", "h5", "h6")
 
 			var embedCount = 0
@@ -2273,7 +2283,7 @@ func (r *engine) cleanConditionally(e *html.Node, tag string) {
 						return haveToRemove
 					}
 				}
-				var liCount = len(elementsByTagName(n, "li"))
+				var liCount = countElementsByTagName(n, "li")
 				// Only allow the list to remain if every li contains an image
 				if img == liCount {
 					return false
@@ -2365,7 +2375,7 @@ func (r *engine) resetDocumentForRetry() {
 func (r *engine) Parse() (*engineResult, error) {
 	// Avoid parsing too large documents, as per configuration option
 	if r.options.maxElemsToParse > 0 {
-		var numTags = len(elementsByTagName(r.doc, "*"))
+		var numTags = countElementsByTagName(r.doc, "*")
 		if numTags > r.options.maxElemsToParse {
 			return nil, fmt.Errorf("aborting parsing document: elements_found=%d", numTags)
 		}

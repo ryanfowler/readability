@@ -30,6 +30,16 @@ func elementsByTagName(n *html.Node, tag string) []*html.Node {
 	})
 	return out
 }
+func countElementsByTagName(n *html.Node, tag string) int {
+	count := 0
+	walkNodes(n, func(x *html.Node) bool {
+		if x != n && x.Type == html.ElementNode && (tag == "*" || x.Data == tag) {
+			count++
+		}
+		return false
+	})
+	return count
+}
 func childNodes(n *html.Node) []*html.Node {
 	var out []*html.Node
 	if n != nil {

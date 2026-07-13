@@ -13,11 +13,12 @@ func BenchmarkParse(b *testing.B) {
 		if err != nil {
 			b.Fatalf("fixtures unavailable: %v", err)
 		}
+		input := string(data)
 		b.Run(name, func(b *testing.B) {
 			b.ReportAllocs()
 			b.SetBytes(int64(len(data)))
 			for i := 0; i < b.N; i++ {
-				if _, err := Parse(string(data), "http://fakehost/test/"+name, nil); err != nil {
+				if _, err := Parse(input, "http://fakehost/test/"+name, nil); err != nil {
 					b.Fatal(err)
 				}
 			}
@@ -30,9 +31,10 @@ func BenchmarkIsProbablyReaderable(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
+	input := string(data)
 	b.ReportAllocs()
 	b.SetBytes(int64(len(data)))
 	for i := 0; i < b.N; i++ {
-		IsProbablyReaderable(string(data), nil)
+		IsProbablyReaderable(input, nil)
 	}
 }
