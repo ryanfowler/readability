@@ -74,8 +74,8 @@ func isProbablyReaderable(doc *html.Node, opts ...engineOption) bool {
 		}
 
 		matchString := attr(n, "class") + " " + attr(n, "id")
-		if unlikelyCandidates.MatchString(matchString) &&
-			!okMaybeItsACandidate.MatchString(matchString) {
+		if matchesUnlikelyCandidate(matchString) &&
+			!matchesMaybeCandidate(matchString) {
 			return false
 		}
 		if n.Data == "p" && hasAncestorTag(n, "li") {
