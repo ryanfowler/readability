@@ -182,13 +182,40 @@ func nodeName(n *html.Node) string {
 	return tagName(n)
 }
 func textContent(n *html.Node) string {
-	var b strings.Builder
-	walkNodes(n, func(x *html.Node) bool {
-		if x.Type == html.TextNode {
-			b.WriteString(x.Data)
+	if n == nil {
+		return ""
+	}
+
+	// Builder's geometric growth is particularly expensive here: Readability
+	// asks for the text of many overlapping subtrees. Determine the exact byte
+	// size first so each result needs a single backing allocation.
+	size := 0
+	var measure func(*html.Node)
+	measure = func(node *html.Node) {
+		if node.Type == html.TextNode {
+			size += len(node.Data)
 		}
-		return false
-	})
+		for child := node.FirstChild; child != nil; child = child.NextSibling {
+			measure(child)
+		}
+	}
+	measure(n)
+	if size == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.Grow(size)
+	var write func(*html.Node)
+	write = func(node *html.Node) {
+		if node.Type == html.TextNode {
+			b.WriteString(node.Data)
+		}
+		for child := node.FirstChild; child != nil; child = child.NextSibling {
+			write(child)
+		}
+	}
+	write(n)
 	return b.String()
 }
 func innerHTML(n *html.Node) string {
