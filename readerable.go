@@ -32,23 +32,8 @@ func isNodeVisible(node *html.Node) bool {
 	// Approximate the browser's style.display/style.visibility properties for
 	// inline declarations. CSS property names and these keyword values are
 	// ASCII case-insensitive, and the last declaration wins.
-	var display, visibility string
-	for _, declaration := range strings.Split(attr(node, "style"), ";") {
-		name, value, ok := strings.Cut(declaration, ":")
-		if !ok {
-			continue
-		}
-		name = strings.ToLower(strings.TrimSpace(name))
-		value = strings.ToLower(strings.TrimSpace(value))
-		value = strings.TrimSpace(strings.TrimSuffix(value, "!important"))
-		switch name {
-		case "display":
-			display = value
-		case "visibility":
-			visibility = value
-		}
-	}
-	if display == "none" || visibility == "hidden" {
+	if strings.EqualFold(getStyle(node, "display"), "none") ||
+		strings.EqualFold(getStyle(node, "visibility"), "hidden") {
 		return false
 	}
 	return attr(node, "hidden") == "" &&
@@ -73,7 +58,7 @@ func isProbablyReaderable(doc *html.Node, opts ...engineOption) bool {
 			return false
 		}
 
-		matchString := attr(n, "class") + " " + attr(n, "id")
+		matchString := classAndID(n)
 		if matchesUnlikelyCandidate(matchString) &&
 			!matchesMaybeCandidate(matchString) {
 			return false

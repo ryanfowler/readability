@@ -267,9 +267,35 @@ func (r *engine) concatNodeLists(nodeLists ...[]*html.Node) []*html.Node {
 }
 
 func (r *engine) getAllNodesWithTag(n *html.Node, tagNames ...string) []*html.Node {
-	nodes := make([]*html.Node, 0)
-	for _, tag := range tagNames {
-		nodes = append(nodes, elementsByTagName(n, tag)...)
+	if len(tagNames) == 0 {
+		return nil
+	}
+	if len(tagNames) == 1 {
+		return elementsByTagName(n, tagNames[0])
+	}
+
+	// The old adapter walked the complete subtree once per requested tag. Keep
+	// its tag-grouped result order, but collect all groups in a single walk.
+	lowerTags := make([]string, len(tagNames))
+	for i, tag := range tagNames {
+		lowerTags[i] = strings.ToLower(tag)
+	}
+	groups := make([][]*html.Node, len(lowerTags))
+	walkNodes(n, func(node *html.Node) bool {
+		if node == n || node.Type != html.ElementNode {
+			return false
+		}
+		for i, tag := range lowerTags {
+			if node.Data == tag {
+				groups[i] = append(groups[i], node)
+				break
+			}
+		}
+		return false
+	})
+	var nodes []*html.Node
+	for _, group := range groups {
+		nodes = append(nodes, group...)
 	}
 	return nodes
 }
@@ -280,7 +306,7 @@ func (r *engine) getAllNodesWithTag(n *html.Node, tagNames ...string) []*html.No
 func (r *engine) cleanClasses(n *html.Node) {
 	className := getAttribute(n, "class")
 	if className != "" {
-		className = strings.Join(filter(r.preserve, multipleWhitespaces.Split(className, -1)...), " ")
+		className = preservedClassName(className, r.preserve)
 	}
 
 	if className != "" {
@@ -298,14 +324,30 @@ func (r *engine) preserve(s string) bool {
 	return slices.Contains(r.options.classesToPreserve, s)
 }
 
-func filter(filterFn func(string) bool, strs ...string) []string {
-	var filtered []string
-	for _, str := range strs {
-		if filterFn(str) {
-			filtered = append(filtered, str)
+// preservedClassName is equivalent to splitting on /\s+/, filtering and
+// joining with one space. Most classes are discarded, so it commonly returns
+// without allocating anything.
+func preservedClassName(s string, preserve func(string) bool) string {
+	var b strings.Builder
+	wrote := false
+	for start := 0; start < len(s); {
+		for start < len(s) && isASCIIWhitespace(s[start]) {
+			start++
 		}
+		end := start
+		for end < len(s) && !isASCIIWhitespace(s[end]) {
+			end++
+		}
+		if start < end && preserve(s[start:end]) {
+			if wrote {
+				b.WriteByte(' ')
+			}
+			b.WriteString(s[start:end])
+			wrote = true
+		}
+		start = end
 	}
-	return filtered
+	return b.String()
 }
 
 // Converts each <a> and <img> uri in the given element to an absolute URI,
@@ -314,6 +356,9 @@ func (r *engine) fixRelativeUris(articleContent *html.Node) {
 	baseURI := r.getBaseURI()
 	documentURI := r.documentURI
 
+	// ResolveReference does not mutate the base URL, so parse it once for the
+	// whole pass rather than once for every link and media attribute.
+	base, baseErr := url.Parse(baseURI)
 	var toAbsoluteURI = func(uri string) string {
 		uri = strings.TrimSpace(uri)
 		if uri == "" {
@@ -323,8 +368,7 @@ func (r *engine) fixRelativeUris(articleContent *html.Node) {
 		if baseURI == documentURI && uri[0] == '#' {
 			return uri
 		}
-		base, err := url.Parse(baseURI)
-		if err != nil {
+		if baseErr != nil {
 			// Something went wrong, just return the original:
 			return uri
 		}
@@ -903,7 +947,7 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 				r.articleLang = getAttribute(n, "lang")
 			}
 
-			var matchString = className(n) + " " + nodeID(n)
+			var matchString = classAndID(n)
 
 			if !isProbablyVisible(n) {
 				slog.Debug("Removing hidden node - " + matchString)
@@ -1033,8 +1077,9 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 			// Add a point for the paragraph itself as a base.
 			contentScore += 1
 
-			// Add points for any commas within this paragraph.
-			contentScore += float64(len(commas.Split(innerText, -1)))
+			// Add points for any commas within this paragraph. Split was only
+			// used to obtain this count and allocated one string per segment.
+			contentScore += float64(articleCommaCount(innerText) + 1)
 
 			// For every 100 characters in this paragraph, add another point. Up to 3 points.
 			contentScore += math.Min(math.Floor(float64(len([]rune(innerText)))/100), 3)
@@ -1823,9 +1868,16 @@ func (r *engine) getInnerText(e *html.Node, normalizeSpaces bool) string {
 	return text
 }
 
-// Get the number of times a string s appears in the node e.
-func (r *engine) getCharCount(e *html.Node, s string) int {
-	return strings.Count(r.getInnerText(e, true), s)
+// articleCommaCount matches the comma variants in the Readability regexp.
+func articleCommaCount(s string) int {
+	count := strings.Count(s, ",")
+	for _, ch := range s {
+		switch ch {
+		case '\u060c', '\ufe50', '\ufe10', '\ufe11', '\u2e41', '\u2e34', '\u2e32', '\uff0c':
+			count++
+		}
+	}
+	return count
 }
 
 // Remove the style attribute on every e and under.
@@ -2168,20 +2220,6 @@ func (r *engine) fixLazyImages(root *html.Node) {
 	}
 }
 
-func (r *engine) getTextDensity(e *html.Node, tags ...string) float64 {
-	var textLength = len(r.getInnerText(e, true))
-	if textLength == 0 {
-		return 0
-	}
-
-	var childrenLength = 0
-	var children = r.getAllNodesWithTag(e, tags...)
-	for _, child := range children {
-		childrenLength += len(r.getInnerText(child, true))
-	}
-	return float64(childrenLength) / float64(textLength)
-}
-
 // Clean an element of all tags of type "tag" if they look fishy.
 // "Fishy" is an algorithm based on content length, classnames, link density, number of images & embeds, etc.
 func (r *engine) cleanConditionally(e *html.Node, tag string) {
@@ -2196,6 +2234,10 @@ func (r *engine) cleanConditionally(e *html.Node, tag string) {
 	// TODO: Consider taking into account original contentScore here.
 
 	r.removeNodes(r.getAllNodesWithTag(e, tag), func(n *html.Node) bool {
+		// Candidate subtrees overlap heavily. Build this normalized text once and
+		// reuse it for all metrics below instead of rebuilding it repeatedly.
+		nodeText := r.getInnerText(n, true)
+
 		// First check if this node IS data table, in which case don't remove it.
 		var isDataTable = func(t *html.Node) bool {
 			return r.nodeState[t] != nil && r.data(t).isDataTable
@@ -2208,7 +2250,7 @@ func (r *engine) cleanConditionally(e *html.Node, tag string) {
 			for _, list := range listNodes {
 				listLength += len(r.getInnerText(list, true))
 			}
-			isList = float64(listLength)/float64(len(r.getInnerText(n, true))) > 0.9
+			isList = float64(listLength)/float64(len(nodeText)) > 0.9
 		}
 
 		if tag == "table" && isDataTable(n) {
@@ -2234,7 +2276,7 @@ func (r *engine) cleanConditionally(e *html.Node, tag string) {
 			return true
 		}
 
-		if r.getCharCount(n, ",") < 10 {
+		if strings.Count(nodeText, ",") < 10 {
 			// If there are not very many commas, and the number of
 			// non-paragraph elements is more than paragraphs or other
 			// ominous signs, remove the element.
@@ -2242,7 +2284,14 @@ func (r *engine) cleanConditionally(e *html.Node, tag string) {
 			var img = countElementsByTagName(n, "img")
 			var li = countElementsByTagName(n, "li") - 100
 			var input = countElementsByTagName(n, "input")
-			var headingDensity = r.getTextDensity(n, "h1", "h2", "h3", "h4", "h5", "h6")
+			var headingLength int
+			for _, heading := range r.getAllNodesWithTag(n, "h1", "h2", "h3", "h4", "h5", "h6") {
+				headingLength += len(r.getInnerText(heading, true))
+			}
+			var headingDensity float64
+			if len(nodeText) != 0 {
+				headingDensity = float64(headingLength) / float64(len(nodeText))
+			}
 
 			var embedCount = 0
 			var embeds = r.getAllNodesWithTag(n, "object", "embed", "iframe")
@@ -2264,7 +2313,7 @@ func (r *engine) cleanConditionally(e *html.Node, tag string) {
 			}
 
 			var linkDensity = r.getLinkDensity(n)
-			var contentLength = len([]rune(r.getInnerText(n, true)))
+			var contentLength = utf8.RuneCountInString(nodeText)
 
 			var haveToRemove = (img > 1 && float64(p)/float64(img) < 0.5 && !r.hasAncestorTag(n, "figure", 3, nil)) ||
 				(!isList && li > p) ||
@@ -2276,8 +2325,7 @@ func (r *engine) cleanConditionally(e *html.Node, tag string) {
 
 			// Allow simple lists of images to remain in pages
 			if isList && haveToRemove {
-				for x := 0; x < len(elementChildren(n)); x++ {
-					var child = elementChildren(n)[x]
+				for _, child := range elementChildren(n) {
 					// Don't filter in lists with li's that contain more than one child
 					if len(elementChildren(child)) > 1 {
 						return haveToRemove
@@ -2296,11 +2344,19 @@ func (r *engine) cleanConditionally(e *html.Node, tag string) {
 }
 
 // Clean out elements that match the specified conditions
+func classAndID(n *html.Node) string {
+	class, id := className(n), nodeID(n)
+	if class == "" && id == "" {
+		return " "
+	}
+	return class + " " + id
+}
+
 func (r *engine) cleanMatchedNodes(e *html.Node, filter func(*html.Node, string) bool) {
 	var endOfSearchMarkerNode = r.getNextNode(e, true)
 	var next = r.getNextNode(e, false)
 	for next != nil && next != endOfSearchMarkerNode {
-		if filter(next, className(next)+" "+nodeID(next)) {
+		if filter(next, classAndID(next)) {
 			next = r.removeAndGetNext(next)
 		} else {
 			next = r.getNextNode(next, false)

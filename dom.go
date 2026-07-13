@@ -1,9 +1,9 @@
 package readability
 
 import (
-	"bytes"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"golang.org/x/net/html"
 	"golang.org/x/net/html/atom"
@@ -381,8 +381,27 @@ func textContent(n *html.Node) string {
 	return b.String()
 }
 func innerHTML(n *html.Node) string {
-	var b bytes.Buffer
+	// Unlike bytes.Buffer.String, Builder.String does not copy the rendered
+	// document. Article HTML is one of the largest live values returned by the
+	// parser, so avoiding that final copy noticeably lowers peak memory.
+	var b strings.Builder
 	if n != nil {
+		// A cheap size estimate avoids repeatedly copying a large buffer as
+		// html.Render grows it. Escaping may require a little additional space.
+		size := 0
+		walkNodes(n, func(node *html.Node) bool {
+			switch node.Type {
+			case html.TextNode, html.CommentNode:
+				size += len(node.Data)
+			case html.ElementNode:
+				size += 5 + 2*len(node.Data)
+				for _, attr := range node.Attr {
+					size += 4 + len(attr.Key) + len(attr.Val)
+				}
+			}
+			return false
+		})
+		b.Grow(size)
 		for c := n.FirstChild; c != nil; c = c.NextSibling {
 			_ = html.Render(&b, c)
 		}
@@ -482,17 +501,39 @@ func getStyle(n *html.Node, key string) string {
 	if key == "backgroundImage" {
 		key = "background-image"
 	}
+	style := getAttribute(n, "style")
 	var value string
-	for _, part := range strings.Split(getAttribute(n, "style"), ";") {
+	for len(style) != 0 {
+		part := style
+		if i := strings.IndexByte(style, ';'); i >= 0 {
+			part, style = style[:i], style[i+1:]
+		} else {
+			style = ""
+		}
 		k, v, ok := strings.Cut(part, ":")
 		if ok && strings.EqualFold(strings.TrimSpace(k), key) {
 			value = strings.TrimSpace(v)
-			if i := strings.LastIndex(value, "!"); i >= 0 && strings.EqualFold(strings.Join(strings.Fields(value[i+1:]), ""), "important") {
+			if i := strings.LastIndexByte(value, '!'); i >= 0 && isCSSImportant(value[i+1:]) {
 				value = strings.TrimSpace(value[:i])
 			}
 		}
 	}
 	return value
+}
+
+func isCSSImportant(s string) bool {
+	const important = "important"
+	j := 0
+	for _, c := range s {
+		if unicode.IsSpace(c) {
+			continue
+		}
+		if j == len(important) || c != rune(important[j]) && c != rune(important[j]-'a'+'A') {
+			return false
+		}
+		j++
+	}
+	return j == len(important)
 }
 func findElement(n *html.Node, tag string) *html.Node {
 	if n == nil {
