@@ -1,7 +1,6 @@
 package readability
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"net/url"
@@ -77,10 +76,8 @@ func (e *TooManyElementsError) Error() string {
 
 // Document is a parsed document. Parse consumes it and may only be called once.
 type Document struct {
-	// root is the canonical HTML5 tree. Keep source only while the extraction
-	// engine still requires its compatibility DOM.
+	// root is the canonical HTML5 tree used directly by the extraction engine.
 	root     *html.Node
-	source   string
 	mu       sync.Mutex
 	consumed bool
 }
@@ -142,18 +139,7 @@ func NewDocument(input string) (*Document, error) {
 			return nil, ErrNoBody
 		}
 	}
-	source := input
-	if !hasBody {
-		// The extraction DOM intentionally implements only a small browser DOM
-		// and does not synthesize document elements. Serialize the HTML5 parser's
-		// repaired tree so fragments receive the implied html/head/body elements.
-		var repaired bytes.Buffer
-		if err := html.Render(&repaired, doc); err != nil {
-			return nil, err
-		}
-		source = repaired.String()
-	}
-	return &Document{root: doc, source: source}, nil
+	return &Document{root: doc}, nil
 }
 
 func Parse(input, pageURL string, options *Options) (*Article, error) {
@@ -191,19 +177,8 @@ func (d *Document) Parse(pageURL string, options *Options) (*Article, error) {
 			return nil, &TooManyElementsError{count, o.MaxElemsToParse}
 		}
 	}
-	source := d.source
-	source = mathJaxAssistive.ReplaceAllString(source, `<span>$1</span>`)
-	// x/net/html understands MathML, while the lightweight extraction DOM uses
-	// HTML tag names. Preserve MathJax's assistive MathML by treating its custom
-	// wrappers as ordinary inline containers.
-	source = strings.ReplaceAll(source, "mjx-container", "span")
-	source = strings.ReplaceAll(source, "mjx-assistive-mml", "span")
-	for _, tag := range []string{"math", "mi", "mo", "mn", "mfrac", "mover", "mrow", "mspace", "msqrt", "msub", "msubsup", "msup", "mtable", "mtd", "mtext", "mtr", "munderover"} {
-		source = strings.ReplaceAll(source, "<"+tag+">", "<span>")
-		source = strings.ReplaceAll(source, "<"+tag+" ", "<span ")
-		source = strings.ReplaceAll(source, "</"+tag+">", "</span>")
-	}
-	e, err := newEngine(source, pageURL, func(x *engineOptions) {
+	prepareMathJax(d.root)
+	e, err := newEngine(d.root, pageURL, func(x *engineOptions) {
 		x.maxElemsToParse = o.MaxElemsToParse
 		x.nbTopCandidates = o.NbTopCandidates
 		x.charThreshold = o.CharThreshold

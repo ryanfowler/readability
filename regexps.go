@@ -5,8 +5,7 @@ import "regexp"
 // All of the regular expressions in use within readability.
 // Defined up here so we don't instantiate them repeatedly in loops.
 var (
-	cssImportant     = regexp.MustCompile(`(?i)\s*!\s*important\s*$`)
-	mathJaxAssistive = regexp.MustCompile(`(?s)<mjx-container\b[^>]*>.*?<mjx-assistive-mml\b[^>]*>(.*?)</mjx-assistive-mml>.*?</mjx-container>`)
+	cssImportant = regexp.MustCompile(`(?i)\s*!\s*important\s*$`)
 
 	unlikelyCandidates   = regexp.MustCompile(`(?i)-ad-|ai2html|banner|breadcrumbs|combx|comment|community|cover-wrap|disqus|extra|footer|gdpr|header|legends|menu|related|remark|replies|rss|shoutbox|sidebar|skyscraper|social|sponsor|supplemental|ad-break|agegate|pagination|pager|popup|yom-remote`)
 	okMaybeItsACandidate = regexp.MustCompile(`(?i)and|article|body|column|content|main|shadow`)

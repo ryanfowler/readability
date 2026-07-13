@@ -12,7 +12,7 @@ type engineOptions struct {
 	charThreshold       int
 	classesToPreserve   []string
 	keepClasses         bool
-	serializer          func(doc *Node) string
+	serializer          func(doc *html.Node) string
 	html2text           func(htmlSrc string) string
 	disableJSONLD       bool
 	allowedVideoRegex   *regexp.Regexp
@@ -32,8 +32,8 @@ func defaultOpts() *engineOptions {
 		charThreshold:     defaultCharThreshold,
 		classesToPreserve: classesToPreserve,
 		allowedVideoRegex: videos,
-		serializer: func(n *Node) string {
-			return n.GetInnerHTML()
+		serializer: func(n *html.Node) string {
+			return innerHTML(n)
 		},
 		minScore:          20,
 		minContentLength:  140,
