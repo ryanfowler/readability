@@ -48,9 +48,6 @@ var (
 	hashUrl    = regexp.MustCompile(`^#.+`)
 	srcsetUrl  = regexp.MustCompile(`(\S+)(\s+[\d.]+[xw])?(\s*(?:,|$))`)
 	b64DataUrl = regexp.MustCompile(`(?i)^data:\s*([^\s;,]+)\s*;\s*base64\s*,`)
-	// commas as used in Latin, Sindhi, Chinese and various other scripts.
-	// see: https://en.wikipedia.org/wiki/Comma#Comma_variants
-	commas = regexp.MustCompile(`\x{002C}|\x{060C}|\x{FE50}|\x{FE10}|\x{FE11}|\x{2E41}|\x{2E34}|\x{2E32}|\x{FF0C}`)
 	// See: https://schema.org/Article
 	jsonLdArticleTypes   = regexp.MustCompile(`^Article|AdvertiserContentArticle|NewsArticle|AnalysisNewsArticle|AskPublicNewsArticle|BackgroundNewsArticle|OpinionNewsArticle|ReportageNewsArticle|ReviewNewsArticle|Report|SatiricalArticle|ScholarlyArticle|MedicalScholarlyArticle|SocialMediaPosting|BlogPosting|LiveBlogPosting|DiscussionForumPosting|TechArticle|APIReference$`)
 	titleFinalPart       = regexp.MustCompile(` [\|\-–—\\\/>»] `)
