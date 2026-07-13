@@ -177,8 +177,160 @@ func setNodeID(n *html.Node, s string)    { setAttribute(n, "id", s) }
 func nodeSrc(n *html.Node) string         { return getAttribute(n, "src") }
 func nodeSrcset(n *html.Node) string      { return getAttribute(n, "srcset") }
 func tagName(n *html.Node) string {
-	if n == nil {
+	if n == nil || n.Type != html.ElementNode {
 		return ""
+	}
+	// readability.js uses upper-case tagName values. HTML nodes, however, are
+	// stored lower-case by x/net/html. strings.ToUpper allocated on virtually
+	// every node visit, making this tiny compatibility adapter one of the
+	// largest allocation sources on big documents. Return interned constants
+	// for the HTML vocabulary Readability handles and retain the old fallback
+	// for custom elements.
+	switch n.Data {
+	case "a":
+		return "A"
+	case "article":
+		return "ARTICLE"
+	case "aside":
+		return "ASIDE"
+	case "audio":
+		return "AUDIO"
+	case "b":
+		return "B"
+	case "blockquote":
+		return "BLOCKQUOTE"
+	case "body":
+		return "BODY"
+	case "br":
+		return "BR"
+	case "button":
+		return "BUTTON"
+	case "caption":
+		return "CAPTION"
+	case "code":
+		return "CODE"
+	case "dd":
+		return "DD"
+	case "del":
+		return "DEL"
+	case "div":
+		return "DIV"
+	case "dl":
+		return "DL"
+	case "dt":
+		return "DT"
+	case "em":
+		return "EM"
+	case "embed":
+		return "EMBED"
+	case "figcaption":
+		return "FIGCAPTION"
+	case "figure":
+		return "FIGURE"
+	case "footer":
+		return "FOOTER"
+	case "form":
+		return "FORM"
+	case "h1":
+		return "H1"
+	case "h2":
+		return "H2"
+	case "h3":
+		return "H3"
+	case "h4":
+		return "H4"
+	case "h5":
+		return "H5"
+	case "h6":
+		return "H6"
+	case "head":
+		return "HEAD"
+	case "header":
+		return "HEADER"
+	case "hr":
+		return "HR"
+	case "html":
+		return "HTML"
+	case "i":
+		return "I"
+	case "iframe":
+		return "IFRAME"
+	case "img":
+		return "IMG"
+	case "input":
+		return "INPUT"
+	case "ins":
+		return "INS"
+	case "label":
+		return "LABEL"
+	case "li":
+		return "LI"
+	case "link":
+		return "LINK"
+	case "main":
+		return "MAIN"
+	case "meta":
+		return "META"
+	case "nav":
+		return "NAV"
+	case "noscript":
+		return "NOSCRIPT"
+	case "object":
+		return "OBJECT"
+	case "ol":
+		return "OL"
+	case "option":
+		return "OPTION"
+	case "p":
+		return "P"
+	case "picture":
+		return "PICTURE"
+	case "pre":
+		return "PRE"
+	case "script":
+		return "SCRIPT"
+	case "section":
+		return "SECTION"
+	case "select":
+		return "SELECT"
+	case "small":
+		return "SMALL"
+	case "source":
+		return "SOURCE"
+	case "span":
+		return "SPAN"
+	case "strong":
+		return "STRONG"
+	case "style":
+		return "STYLE"
+	case "sub":
+		return "SUB"
+	case "sup":
+		return "SUP"
+	case "table":
+		return "TABLE"
+	case "tbody":
+		return "TBODY"
+	case "td":
+		return "TD"
+	case "textarea":
+		return "TEXTAREA"
+	case "tfoot":
+		return "TFOOT"
+	case "th":
+		return "TH"
+	case "thead":
+		return "THEAD"
+	case "time":
+		return "TIME"
+	case "title":
+		return "TITLE"
+	case "tr":
+		return "TR"
+	case "ul":
+		return "UL"
+	case "video":
+		return "VIDEO"
 	}
 	return strings.ToUpper(n.Data)
 }
@@ -264,12 +416,38 @@ func cloneTree(n *html.Node) *html.Node {
 	if n == nil {
 		return nil
 	}
-	clone := &html.Node{Type: n.Type, DataAtom: n.DataAtom, Data: n.Data, Namespace: n.Namespace}
-	clone.Attr = append([]html.Attribute(nil), n.Attr...)
-	for child := n.FirstChild; child != nil; child = child.NextSibling {
-		clone.AppendChild(cloneTree(child))
+
+	// A document contains thousands of nodes and the retry snapshot lives for
+	// the entire extraction. Allocating every node and attribute slice
+	// separately puts considerable pressure on both the allocator and GC. Two
+	// passes let the snapshot use one backing array for each while preserving
+	// ordinary *html.Node links and independent attribute capacities.
+	nodeCount, attrCount := 0, 0
+	walkNodes(n, func(node *html.Node) bool {
+		nodeCount++
+		attrCount += len(node.Attr)
+		return false
+	})
+	nodes := make([]html.Node, nodeCount)
+	attrs := make([]html.Attribute, attrCount)
+	nodeIndex, attrIndex := 0, 0
+	var copyNode func(*html.Node) *html.Node
+	copyNode = func(src *html.Node) *html.Node {
+		dst := &nodes[nodeIndex]
+		nodeIndex++
+		dst.Type, dst.DataAtom, dst.Data, dst.Namespace = src.Type, src.DataAtom, src.Data, src.Namespace
+		if len(src.Attr) != 0 {
+			end := attrIndex + len(src.Attr)
+			dst.Attr = attrs[attrIndex:end:end]
+			copy(dst.Attr, src.Attr)
+			attrIndex = end
+		}
+		for child := src.FirstChild; child != nil; child = child.NextSibling {
+			dst.AppendChild(copyNode(child))
+		}
+		return dst
 	}
-	return clone
+	return copyNode(n)
 }
 
 // prepareMathJax performs the old MathJax assistive-markup normalization on
