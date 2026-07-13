@@ -1,16 +1,39 @@
 package readability
 
-import "regexp"
+import (
+	"regexp"
+	"strings"
+)
+
+var (
+	unlikelyCandidateParts = []string{
+		"-ad-", "ai2html", "banner", "breadcrumbs", "combx", "comment", "community", "cover-wrap", "disqus", "extra", "footer", "gdpr", "header", "legends", "menu", "related", "remark", "replies", "rss", "shoutbox", "sidebar", "skyscraper", "social", "sponsor", "supplemental", "ad-break", "agegate", "pagination", "pager", "popup", "yom-remote",
+	}
+	maybeCandidateParts = []string{"and", "article", "body", "column", "content", "main", "shadow"}
+)
+
+func containsAnyFold(s string, parts []string) bool {
+	// DOM class and id values are overwhelmingly ASCII. Avoid regexp's
+	// backtracking alternation while retaining its case-insensitive behavior.
+	s = strings.ToLower(s)
+	for _, part := range parts {
+		if strings.Contains(s, part) {
+			return true
+		}
+	}
+	return false
+}
+
+func matchesUnlikelyCandidate(s string) bool { return containsAnyFold(s, unlikelyCandidateParts) }
+func matchesMaybeCandidate(s string) bool    { return containsAnyFold(s, maybeCandidateParts) }
 
 // All of the regular expressions in use within readability.
 // Defined up here so we don't instantiate them repeatedly in loops.
 var (
 	cssImportant = regexp.MustCompile(`(?i)\s*!\s*important\s*$`)
 
-	unlikelyCandidates   = regexp.MustCompile(`(?i)-ad-|ai2html|banner|breadcrumbs|combx|comment|community|cover-wrap|disqus|extra|footer|gdpr|header|legends|menu|related|remark|replies|rss|shoutbox|sidebar|skyscraper|social|sponsor|supplemental|ad-break|agegate|pagination|pager|popup|yom-remote`)
-	okMaybeItsACandidate = regexp.MustCompile(`(?i)and|article|body|column|content|main|shadow`)
-	positive             = regexp.MustCompile(`(?i)article|body|content|entry|hentry|h-entry|main|page|pagination|post|text|blog|story`)
-	negative             = regexp.MustCompile(`(?i)-ad-|hidden|^hid$| hid$| hid |^hid |banner|combx|comment|com-|contact|foot|footer|footnote|gdpr|masthead|media|meta|outbrain|promo|related|scroll|share|shoutbox|sidebar|skyscraper|sponsor|shopping|tags|tool|widget`)
+	positive = regexp.MustCompile(`(?i)article|body|content|entry|hentry|h-entry|main|page|pagination|post|text|blog|story`)
+	negative = regexp.MustCompile(`(?i)-ad-|hidden|^hid$| hid$| hid |^hid |banner|combx|comment|com-|contact|foot|footer|footnote|gdpr|masthead|media|meta|outbrain|promo|related|scroll|share|shoutbox|sidebar|skyscraper|sponsor|shopping|tags|tool|widget`)
 	//extraneous           = regexp.MustCompile(`(?i)print|archive|comment|discuss|e[\-]?mail|share|reply|all|login|sign|single|utility`)
 	byline = regexp.MustCompile(`(?i)byline|author|dateline|writtenby|p-author`)
 	//replaceFonts         = regexp.MustCompile(`(?i)<(\/?)font[^>]*>`)

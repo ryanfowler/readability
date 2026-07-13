@@ -931,8 +931,8 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 
 			// Remove unlikely candidates
 			if stripUnlikelyCandidates {
-				if unlikelyCandidates.MatchString(matchString) &&
-					!okMaybeItsACandidate.MatchString(matchString) &&
+				if matchesUnlikelyCandidate(matchString) &&
+					!matchesMaybeCandidate(matchString) &&
 					!r.hasAncestorTag(n, "table", 3, nil) &&
 					!r.hasAncestorTag(n, "code", 3, nil) &&
 					tagName(n) != "BODY" &&
