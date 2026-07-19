@@ -779,8 +779,8 @@ func (r *engine) prepArticle(articleContent *html.Node) {
 	var shareElementThreshold = defaultCharThreshold
 	for topCandidate := firstElementChild(articleContent); topCandidate != nil; {
 		next := nextElementSibling(topCandidate)
-		r.cleanMatchedNodes(topCandidate, func(n *html.Node, matchString string) bool {
-			return shareElements.MatchString(matchString) &&
+		r.cleanMatchedNodes(topCandidate, func(n *html.Node, class, id string) bool {
+			return (matchesShareElement(class) || matchesShareElement(id)) &&
 				characterCount(textContent(n)) < shareElementThreshold
 		})
 		topCandidate = next
@@ -931,7 +931,7 @@ func (r *engine) textSimilarity(textA, textB string) float64 {
 	return 1 - distanceB
 }
 
-func (r *engine) checkByline(n *html.Node, matchString string) bool {
+func (r *engine) checkByline(n *html.Node, class, id string) bool {
 	if r.articleByline != "" {
 		return false
 	}
@@ -939,7 +939,7 @@ func (r *engine) checkByline(n *html.Node, matchString string) bool {
 	var rel = getAttribute(n, "rel")
 	var itemprop = getAttribute(n, "itemprop")
 
-	if (rel == "author" || strings.Contains(itemprop, "author") || byline.MatchString(matchString)) && r.isValidByline(textContent(n)) {
+	if (rel == "author" || strings.Contains(itemprop, "author") || matchesByline(class) || matchesByline(id)) && r.isValidByline(textContent(n)) {
 		bylineNode := n
 		for _, child := range elementsByTagName(n, "*") {
 			if getAttribute(child, "itemprop") == "name" {
@@ -1013,10 +1013,10 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 				r.articleLang = getAttribute(n, "lang")
 			}
 
-			var matchString = classAndID(n)
+			class, id := className(n), nodeID(n)
 
 			if !isProbablyVisible(n) {
-				r.logDebug("Removing hidden node - " + matchString)
+				r.logDebug("Removing hidden node", "class", class, "id", id)
 				n = r.removeAndGetNext(n)
 				continue
 			}
@@ -1028,7 +1028,7 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 			}
 
 			// Check to see if this node is a byline, and remove it if it is.
-			if r.checkByline(n, matchString) {
+			if r.checkByline(n, class, id) {
 				n = r.removeAndGetNext(n)
 				continue
 			}
@@ -1042,20 +1042,20 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 
 			// Remove unlikely candidates
 			if stripUnlikelyCandidates {
-				if matchesUnlikelyCandidate(matchString) &&
-					!matchesMaybeCandidate(matchString) &&
+				if (matchesUnlikelyCandidate(class) || matchesUnlikelyCandidate(id)) &&
+					!matchesMaybeCandidate(class) && !matchesMaybeCandidate(id) &&
 					!r.hasAncestorTag(n, "table", 3, nil) &&
 					!r.hasAncestorTag(n, "code", 3, nil) &&
 					tagName(n) != "BODY" &&
 					tagName(n) != "A" {
-					r.logDebug("Removing unlikely candidate", "matchString", matchString)
+					r.logDebug("Removing unlikely candidate", "class", class, "id", id)
 					n = r.removeAndGetNext(n)
 					continue
 				}
 			}
 
 			if slices.Contains(unlinkelyRoles, getAttribute(n, "role")) {
-				r.logDebug("Removing content", "role", getAttribute(n, "role"), "matchString", matchString)
+				r.logDebug("Removing content", "role", getAttribute(n, "role"), "class", class, "id", id)
 				n = r.removeAndGetNext(n)
 				continue
 			}
@@ -1350,7 +1350,8 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 
 					if nodeLength > 80 && linkDensity < 0.25 {
 						append = true
-					} else if nodeLength < 80 && linkDensity == 0 && dotSpaceOrDollar.FindAllString(nodeContent, -1) != nil {
+					} else if nodeLength < 80 && linkDensity == 0 &&
+						(strings.Contains(nodeContent, ". ") || strings.HasSuffix(nodeContent, ".")) {
 						append = true
 					}
 				}
@@ -1995,7 +1996,7 @@ func (r *engine) getLinkDensity(element *html.Node) float64 {
 		isLink := n != element && n.Type == html.ElementNode && n.Data == "a"
 		if isLink {
 			coefficient := 1.0
-			if href := getAttribute(n, "href"); href != "" && hashUrl.MatchString(href) {
+			if href := getAttribute(n, "href"); len(href) > 1 && href[0] == '#' {
 				coefficient = 0.3
 			}
 			links = append(links, linkTextCounter{coefficient: coefficient})
@@ -2034,6 +2035,21 @@ type normalizedTextCounter struct {
 
 func (c *normalizedTextCounter) add(s string) {
 	for i := 0; i < len(s); {
+		// Consume the common run of printable, non-space ASCII in one batch.
+		// This avoids rune decoding and five whitespace comparisons per byte.
+		if s[i] >= '!' && s[i] < utf8.RuneSelf {
+			start := i
+			for i < len(s) && s[i] >= '!' && s[i] < utf8.RuneSelf {
+				i++
+			}
+			if c.started {
+				c.length += c.pending
+			}
+			c.length += i - start
+			c.pending, c.asciiRun, c.started = 0, 0, true
+			continue
+		}
+
 		ch := rune(s[i])
 		size := 1
 		if s[i] >= utf8.RuneSelf {
@@ -2091,18 +2107,18 @@ func (r *engine) getClassWeight(e *html.Node) float64 {
 	// up for the empty check and for both regular expressions.
 	class, id := className(e), nodeID(e)
 	if class != "" {
-		if negative.MatchString(class) {
+		if matchesNegative(class) {
 			weight -= 25
 		}
-		if positive.MatchString(class) {
+		if matchesPositive(class) {
 			weight += 25
 		}
 	}
 	if id != "" {
-		if negative.MatchString(id) {
+		if matchesNegative(id) {
 			weight -= 25
 		}
-		if positive.MatchString(id) {
+		if matchesPositive(id) {
 			weight += 25
 		}
 	}
@@ -2518,20 +2534,12 @@ func (r *engine) cleanConditionally(e *html.Node, tag string) {
 	})
 }
 
-// Clean out elements that match the specified conditions
-func classAndID(n *html.Node) string {
-	class, id := className(n), nodeID(n)
-	if class == "" && id == "" {
-		return " "
-	}
-	return class + " " + id
-}
-
-func (r *engine) cleanMatchedNodes(e *html.Node, filter func(*html.Node, string) bool) {
+// Clean out elements that match the specified conditions.
+func (r *engine) cleanMatchedNodes(e *html.Node, filter func(*html.Node, string, string) bool) {
 	var endOfSearchMarkerNode = r.getNextNode(e, true)
 	var next = r.getNextNode(e, false)
 	for next != nil && next != endOfSearchMarkerNode {
-		if filter(next, classAndID(next)) {
+		if filter(next, className(next), nodeID(next)) {
 			next = r.removeAndGetNext(next)
 		} else {
 			next = r.getNextNode(next, false)
