@@ -67,7 +67,7 @@ func isProbablyReaderable(doc *html.Node, opts ...engineOption) bool {
 			return false
 		}
 
-		textContentLength := len(strings.TrimSpace(textContent(n)))
+		textContentLength := characterCount(strings.TrimSpace(textContent(n)))
 		if textContentLength < options.minContentLength {
 			return false
 		}

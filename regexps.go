@@ -70,7 +70,6 @@ var (
 	// name is a single value
 	namePattern                   = regexp.MustCompile(`(?i)^\s*(?:(dc|dcterm|og|twitter|parsely|weibo:(article|webpage))\s*[-\.:]?\s*)?(author|creator|pub-date|description|title|site_name)\s*$`)
 	imgExtensions                 = regexp.MustCompile(`\.(jpg|jpeg|png|webp)`)
-	base64Starts                  = regexp.MustCompile(`base64\s*`)
 	imgExtensionsWithSpacesAndNum = regexp.MustCompile(`\.(jpg|jpeg|png|webp)\s+\d`)
 	imgExtensionsAmongText        = regexp.MustCompile(`^\s*\S+\.(jpg|jpeg|png|webp)\S*\s*$`)
 )

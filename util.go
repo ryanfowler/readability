@@ -6,6 +6,19 @@ import (
 	"golang.org/x/net/html"
 )
 
+// characterCount returns the number of UTF-16 code units in s. Readability's
+// thresholds originate in JavaScript, where String.length has this semantic.
+func characterCount(s string) int {
+	count := 0
+	for _, r := range s {
+		count++
+		if r > 0xffff {
+			count++
+		}
+	}
+	return count
+}
+
 func indexOf[T any](el *T, a []*T) int {
 	return slices.IndexFunc(a, func(ell *T) bool {
 		return ell == el
