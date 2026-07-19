@@ -24,7 +24,6 @@ package readability
 import (
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"math"
 	"net/url"
 	"slices"
@@ -172,6 +171,18 @@ func (r *engine) data(n *html.Node) *nodeData {
 	return d
 }
 
+func (r *engine) logDebug(msg string, args ...any) {
+	if r.options.logger != nil {
+		r.options.logger.Debug(msg, args...)
+	}
+}
+
+func (r *engine) logError(msg string, args ...any) {
+	if r.options.logger != nil {
+		r.options.logger.Error(msg, args...)
+	}
+}
+
 func (r *engine) getBaseURI() string {
 	if r.baseURI != "" {
 		return r.baseURI
@@ -237,7 +248,7 @@ func (r *engine) removeNodes(nodeList []*html.Node, filterFn func(n *html.Node) 
 		if parentNode != nil {
 			if filterFn == nil || filterFn(node) {
 				if _, err := removeChild(parentNode, node); err != nil {
-					slog.Error("cannot remove child", slog.String("err", err.Error()))
+					r.logError("cannot remove child", "err", err)
 				}
 			}
 		}
@@ -662,7 +673,7 @@ func (r *engine) replaceBrs(n *html.Node) {
 			replaced = true
 			var brSibling = next.NextSibling
 			if _, err := removeChild(next.Parent, next); err != nil {
-				slog.Error("cannot remove child", slog.String("err", err.Error()))
+				r.logError("cannot remove child", "err", err)
 			}
 			next = brSibling
 		}
@@ -696,7 +707,7 @@ func (r *engine) replaceBrs(n *html.Node) {
 
 			for lastChild(p) != nil && r.isWhitespace(lastChild(p)) {
 				if _, err := removeChild(p, lastChild(p)); err != nil {
-					slog.Error("cannot remove child", slog.String("err", err.Error()))
+					r.logError("cannot remove child", "err", err)
 				}
 			}
 
@@ -708,7 +719,7 @@ func (r *engine) replaceBrs(n *html.Node) {
 }
 
 func (r *engine) setNodeTag(n *html.Node, tag string) *html.Node {
-	slog.Debug("setNodeTag", "node", n, "tag", tag)
+	r.logDebug("setNodeTag", "node", n, "tag", tag)
 	tag = strings.ToLower(tag)
 	n.Data = tag
 	n.DataAtom = atom.Lookup([]byte(tag))
@@ -778,7 +789,7 @@ func (r *engine) prepArticle(articleContent *html.Node) {
 		var next = r.nextNode(br.NextSibling)
 		if next != nil && tagName(next) == "P" {
 			if _, err := removeChild(br.Parent, br); err != nil {
-				slog.Error("cannot remove child", slog.String("err", err.Error()))
+				r.logError("cannot remove child", "err", err)
 			}
 		}
 	}
@@ -830,7 +841,7 @@ func (r *engine) initializeNode(n *html.Node) {
 func (r *engine) removeAndGetNext(n *html.Node) *html.Node {
 	var nextNode = r.getNextNode(n, true)
 	if _, err := removeChild(n.Parent, n); err != nil {
-		slog.Error("cannot remove child", slog.String("err", err.Error()))
+		r.logError("cannot remove child", "err", err)
 	}
 	return nextNode
 }
@@ -920,7 +931,7 @@ func (r *engine) getNodeAncestors(n *html.Node, maxDepth int) []*html.Node {
 // most likely to be the stuff a user wants to read. Then return it wrapped up in a div.
 func (r *engine) grabArticle(page *html.Node) *html.Node {
 
-	slog.Debug("**** grabArticle ****")
+	r.logDebug("**** grabArticle ****")
 	var isPaging bool
 	if page != nil {
 		isPaging = true
@@ -931,7 +942,7 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 
 	// We can't grab an article if we don't have a page!
 	if page == nil {
-		slog.Debug("No body found in document. Abort.")
+		r.logDebug("No body found in document. Abort.")
 		return nil
 	}
 
@@ -939,7 +950,7 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 		// Scores and table classification are local to this attempt. On retries
 		// resetDocumentForRetry replaces the entire tree with freshly parsed nodes.
 		clear(r.nodeState)
-		slog.Debug("Starting grabArticle loop")
+		r.logDebug("Starting grabArticle loop")
 		var stripUnlikelyCandidates = r.flagIsActive(flagStripUnlikelys)
 
 		// First, node prepping. Trash nodes that look cruddy (like ones with the
@@ -956,7 +967,7 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 			// documents. Debug arguments are evaluated eagerly, so don't build them
 			// unless debugging was explicitly requested.
 			if r.options.debug {
-				slog.Debug("elementsToScore", "nodeText", textContent(n))
+				r.logDebug("elementsToScore", "nodeText", textContent(n))
 			}
 
 			if tagName(n) == "HTML" {
@@ -966,7 +977,7 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 			var matchString = classAndID(n)
 
 			if !isProbablyVisible(n) {
-				slog.Debug("Removing hidden node - " + matchString)
+				r.logDebug("Removing hidden node - " + matchString)
 				n = r.removeAndGetNext(n)
 				continue
 			}
@@ -984,7 +995,7 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 			}
 
 			if shouldRemoveTitleHeader && r.headerDuplicatesTitle(n) {
-				slog.Debug("Removing header:", "textContent", strings.TrimSpace(textContent(n)), "articleTitle", strings.TrimSpace(r.articleTitle))
+				r.logDebug("Removing header:", "textContent", strings.TrimSpace(textContent(n)), "articleTitle", strings.TrimSpace(r.articleTitle))
 				shouldRemoveTitleHeader = false
 				n = r.removeAndGetNext(n)
 				continue
@@ -998,14 +1009,14 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 					!r.hasAncestorTag(n, "code", 3, nil) &&
 					tagName(n) != "BODY" &&
 					tagName(n) != "A" {
-					slog.Debug("Removing unlikely candidate", "matchString", matchString)
+					r.logDebug("Removing unlikely candidate", "matchString", matchString)
 					n = r.removeAndGetNext(n)
 					continue
 				}
 			}
 
 			if slices.Contains(unlinkelyRoles, getAttribute(n, "role")) {
-				slog.Debug("Removing content", "role", getAttribute(n, "role"), "matchString", matchString)
+				r.logDebug("Removing content", "role", getAttribute(n, "role"), "matchString", matchString)
 				n = r.removeAndGetNext(n)
 				continue
 			}
@@ -1041,7 +1052,7 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 					} else if p != nil {
 						for lastChild(p) != nil && r.isWhitespace(lastChild(p)) {
 							if _, err := removeChild(p, lastChild(p)); err != nil {
-								slog.Error("cannot remove child", slog.String("err", err.Error()))
+								r.logError("cannot remove child", "err", err)
 							}
 						}
 						p = nil
@@ -1124,7 +1135,7 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 				}
 				r.data(ancestor).contentScore += contentScore / float64(scoreDivider)
 				if r.options.debug {
-					slog.Debug("assigned score", "ancestor", textContent(ancestor), "score", r.data(ancestor).contentScore)
+					r.logDebug("assigned score", "ancestor", textContent(ancestor), "score", r.data(ancestor).contentScore)
 				}
 			}
 		}
@@ -1142,7 +1153,7 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 			r.data(candidate).contentScore = candidateScore
 
 			if r.options.debug {
-				slog.Debug("grabArticle", "candidate", textContent(candidate), "scaled-score", candidateScore)
+				r.logDebug("grabArticle", "candidate", textContent(candidate), "scaled-score", candidateScore)
 			}
 
 			for t := 0; t < r.options.nbTopCandidates; t++ {
@@ -1178,7 +1189,7 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 			// Move everything (not just elements, also text nodes etc.) into the container
 			// so we even include text directly in the body:
 			for firstChild(page) != nil {
-				slog.Debug("Moving out:", "child", nodeName(firstChild(page)))
+				r.logDebug("Moving out:", "child", nodeName(firstChild(page)))
 				appendChild(topCandidate, firstChild(page))
 			}
 
@@ -1277,7 +1288,7 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 			var append = false
 
 			if r.options.debug {
-				slog.Debug("Looking at sibling node:", "sibling", textContent(sibling), "score", r.nodeState[sibling])
+				r.logDebug("Looking at sibling node:", "sibling", textContent(sibling), "score", r.nodeState[sibling])
 			}
 
 			if sibling == topCandidate {
@@ -1307,13 +1318,13 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 
 			if append {
 				if r.options.debug {
-					slog.Debug("appending", "node", textContent(sibling))
+					r.logDebug("appending", "node", textContent(sibling))
 				}
 				if !slices.Contains(alterToDiveExceptions, nodeName(sibling)) {
 					// We have a node that isn't a common block level element, like a form or td tag.
 					// Turn it into a div so it doesn't get filtered out later by accident.
 					if r.options.debug {
-						slog.Debug("altering", "node", textContent(sibling))
+						r.logDebug("altering", "node", textContent(sibling))
 					}
 
 					sibling = r.setNodeTag(sibling, "DIV")
@@ -1333,12 +1344,12 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 		}
 
 		if r.options.debug {
-			slog.Debug("Article content pre-prep", "innerHTML", innerHTML(articleContent))
+			r.logDebug("Article content pre-prep", "innerHTML", innerHTML(articleContent))
 		}
 		// So we have all of the content that we need. Now we clean it up for presentation.
 		r.prepArticle(articleContent)
 		if r.options.debug {
-			slog.Debug("Article content post-prep", "innerHTML", innerHTML(articleContent))
+			r.logDebug("Article content post-prep", "innerHTML", innerHTML(articleContent))
 		}
 
 		if neededToCreateTopCandidate {
@@ -1359,7 +1370,7 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 		}
 
 		if r.options.debug {
-			slog.Debug("Article content after paging", "innerHTML", innerHTML(articleContent))
+			r.logDebug("Article content after paging", "innerHTML", innerHTML(articleContent))
 		}
 
 		var parseSuccessful = true
@@ -1438,7 +1449,7 @@ func (r *engine) unescapeHtmlEntities(str string) string {
 	}
 	decoded, err := decodeHTML(str)
 	if err != nil {
-		slog.Error(err.Error())
+		r.logError(err.Error())
 	}
 	return decoded
 }
@@ -1694,7 +1705,7 @@ func (r *engine) unwrapNoscriptImages(doc *html.Node) {
 
 		if !containsImg {
 			if _, err := removeChild(img.Parent, img); err != nil {
-				slog.Error("cannot remove child", slog.String("err", err.Error()))
+				r.logError("cannot remove child", "err", err)
 			}
 		}
 	}
@@ -1706,7 +1717,7 @@ func (r *engine) unwrapNoscriptImages(doc *html.Node) {
 		// x/net/html represents body noscript markup as a raw text node. Parse
 		// that text just as assigning noscript.textContent to innerHTML would.
 		if err := setInnerHTML(div, textContent(noscript)); err != nil {
-			slog.Debug("cannot parse noscript content", "error", err)
+			r.logDebug("cannot parse noscript content", "error", err)
 			continue
 		}
 		if !r.isSingleImage(div) {
@@ -2071,7 +2082,7 @@ func (r *engine) getRowAndColumnCount(table *html.Node) (int, int) {
 		if rowspan != "" {
 			num, err := strconv.Atoi(rowspan)
 			if err != nil {
-				slog.Error(err.Error())
+				r.logError(err.Error())
 			}
 			rs = num
 		}
@@ -2090,7 +2101,7 @@ func (r *engine) getRowAndColumnCount(table *html.Node) (int, int) {
 			if colspan != "" {
 				num, err := strconv.Atoi(colspan)
 				if err != nil {
-					slog.Error(err.Error())
+					r.logError(err.Error())
 				}
 				cs = num
 			}
@@ -2143,7 +2154,7 @@ func (r *engine) markDataTables(root *html.Node) {
 		}
 
 		if slices.ContainsFunc(dataTableDescendants, descendantExists) {
-			slog.Debug("Data table because found data-y descendant")
+			r.logDebug("Data table because found data-y descendant")
 			r.data(table).isDataTable = true
 			continue
 		}
@@ -2284,7 +2295,7 @@ func (r *engine) cleanConditionally(e *html.Node, tag string) {
 
 		var weight = r.getClassWeight(n)
 
-		slog.Debug("Cleaning Conditionally", "node", n)
+		r.logDebug("Cleaning Conditionally", "node", n)
 
 		var contentScore = 0.0
 
@@ -2386,7 +2397,7 @@ func (r *engine) cleanHeaders(n *html.Node) {
 	r.removeNodes(headingNodes, func(nn *html.Node) bool {
 		var shouldRemove = r.getClassWeight(nn) < 0
 		if shouldRemove {
-			slog.Debug("Removing header with low class weight", "node", nn)
+			r.logDebug("Removing header with low class weight", "node", nn)
 		}
 		return shouldRemove
 	})
@@ -2399,7 +2410,7 @@ func (r *engine) headerDuplicatesTitle(n *html.Node) bool {
 		return false
 	}
 	var heading = r.getInnerText(n, false)
-	slog.Debug("Evaluating similarity of header", "heading", heading, "articleTitle", r.articleTitle)
+	r.logDebug("Evaluating similarity of header", "heading", heading, "articleTitle", r.articleTitle)
 	return r.textSimilarity(r.articleTitle, heading) > 0.75
 }
 
@@ -2483,7 +2494,7 @@ func (r *engine) Parse() (*engineResult, error) {
 	}
 
 	if r.options.debug {
-		slog.Debug("grabbed", "articleContent.innerHTML", innerHTML(articleContent))
+		r.logDebug("grabbed", "articleContent.innerHTML", innerHTML(articleContent))
 	}
 
 	r.postProcessContent(articleContent)

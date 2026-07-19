@@ -1,6 +1,7 @@
 package readability
 
 import (
+	"log/slog"
 	"regexp"
 
 	"golang.org/x/net/html"
@@ -20,6 +21,7 @@ type engineOptions struct {
 	minScore            float64
 	visibilityChecker   func(*html.Node) bool
 	linkDensityModifier float64
+	logger              *slog.Logger
 	debug               bool
 }
 

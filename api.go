@@ -3,6 +3,7 @@ package readability
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"regexp"
 	"strings"
@@ -43,7 +44,9 @@ type Options struct {
 	DisableJSONLD       bool
 	AllowedVideoRegex   *regexp.Regexp
 	LinkDensityModifier float64
-	Debug               bool
+	// Logger receives extraction logs. If nil, logging is disabled.
+	Logger *slog.Logger
+	Debug  bool
 }
 
 // ReaderableOptions controls the inexpensive readerability heuristic.
@@ -189,6 +192,7 @@ func parseNode(root *html.Node, pageURL string, options *Options, cloneInput boo
 		x.keepClasses = o.KeepClasses
 		x.disableJSONLD = o.DisableJSONLD
 		x.linkDensityModifier = o.LinkDensityModifier
+		x.logger = o.Logger
 		x.debug = o.Debug
 		if o.AllowedVideoRegex != nil {
 			x.allowedVideoRegex = o.AllowedVideoRegex
