@@ -11,13 +11,17 @@ import (
 	"golang.org/x/net/html"
 )
 
-// Article is the extracted article and metadata. Content is unsanitized HTML.
+// Article is the extracted article and metadata. Content and Node are
+// unsanitized. Node is the parsed element whose inner HTML is Content.
 type Article struct {
 	Title   string `json:"title"`
 	Byline  string `json:"byline"`
 	Dir     string `json:"dir"`
 	Lang    string `json:"lang"`
 	Content string `json:"content"`
+	// Node is the extracted article as a parsed HTML node. It is omitted from
+	// JSON because html.Node contains cyclic links.
+	Node *html.Node `json:"-"`
 	// TextContent is plain text with whitespace collapsed to single spaces,
 	// except inside preformatted elements.
 	TextContent string `json:"textContent"`
@@ -220,7 +224,19 @@ func parseNode(root *html.Node, pageURL string, options *Options, cloneInput boo
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrNoContent, err)
 	}
-	return &Article{r.Title, r.Byline, r.Dir, r.Lang, r.HTMLContent, r.TextContent, r.Length, r.Excerpt, r.SiteName, r.PublishedTime}, nil
+	return &Article{
+		Title:         r.Title,
+		Byline:        r.Byline,
+		Dir:           r.Dir,
+		Lang:          r.Lang,
+		Content:       r.HTMLContent,
+		Node:          r.Node,
+		TextContent:   r.TextContent,
+		Length:        r.Length,
+		Excerpt:       r.Excerpt,
+		SiteName:      r.SiteName,
+		PublishedTime: r.PublishedTime,
+	}, nil
 }
 
 // IsProbablyReaderable reports whether HTML source is likely to contain an

@@ -222,6 +222,8 @@ func (r *engine) getBaseURI() string {
 type engineResult struct {
 	// article title
 	Title string
+	// extracted article node
+	Node *html.Node
 	// HTML string of processed article HTMLContent
 	HTMLContent string
 	// text content of the article, with all the HTML tags removed
@@ -2709,6 +2711,7 @@ func (r *engine) Parse() (*engineResult, error) {
 
 	return &engineResult{
 		Title:         r.articleTitle,
+		Node:          articleContent,
 		Byline:        anyOf(metadata.byline, r.articleByline),
 		Dir:           r.articleDir,
 		Lang:          r.articleLang,

@@ -47,6 +47,6 @@ Errors support `errors.Is` for `ErrNoContent`, `ErrNoBody`, and `ErrInvalidURL`;
 
 Behavior tracks Mozilla Readability.js at commit `08be6b4bdb204dd333c9b7a0cfbc0e730b257252`; its official 130-case corpus is pinned as `tests/readability-js`. HTML is parsed and serialized with Go rather than a browser DOM, so inconsequential attribute ordering and HTML serialization can differ.
 
-> **Security:** `Article.Content` is not sanitized. Never insert content into a trusted page without applying an appropriate HTML sanitizer.
+> **Security:** `Article.Content` and `Article.Node` are not sanitized. Never render either in a trusted page without applying an appropriate HTML sanitizer.
 
 This implementation includes code derived from Mozilla Readability and Arc90 Readability under the Apache License 2.0. Mozilla's fixture license is retained in the pinned submodule.
