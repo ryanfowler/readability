@@ -39,6 +39,8 @@ Passing `nil` selects all defaults. Do not use a partially populated literal suc
 
 `CharThreshold` controls extraction retries. When an attempt produces less text than the threshold, extraction runs again with progressively less aggressive candidate removal, class weighting, and conditional cleanup. If no attempt reaches the threshold, the longest non-empty result is returned. Set `CharThreshold` to zero to disable retries.
 
+All advertised character counts—including `CharThreshold`, `ReaderableOptions.MinContentLength`, and `Article.Length`—use UTF-16 code units, matching JavaScript `String.length` and Mozilla Readability. Thus most characters count as one unit and characters outside the Basic Multilingual Plane (such as many emoji) count as two.
+
 Errors support `errors.Is` for `ErrNoContent`, `ErrNoBody`, and `ErrInvalidURL`; use `errors.As` for `*TooManyElementsError`. Relative links and media URLs are resolved against the page URL and document base URL.
 
 ## Compatibility

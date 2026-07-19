@@ -13,12 +13,13 @@ import (
 
 // Article is the extracted article and metadata. Content is unsanitized HTML.
 type Article struct {
-	Title         string `json:"title"`
-	Byline        string `json:"byline"`
-	Dir           string `json:"dir"`
-	Lang          string `json:"lang"`
-	Content       string `json:"content"`
-	TextContent   string `json:"textContent"`
+	Title       string `json:"title"`
+	Byline      string `json:"byline"`
+	Dir         string `json:"dir"`
+	Lang        string `json:"lang"`
+	Content     string `json:"content"`
+	TextContent string `json:"textContent"`
+	// Length is the length of TextContent in UTF-16 code units.
 	Length        int    `json:"length"`
 	Excerpt       string `json:"excerpt"`
 	SiteName      string `json:"siteName"`
@@ -34,9 +35,10 @@ type Article struct {
 type Options struct {
 	MaxElemsToParse int
 	NbTopCandidates int
-	// CharThreshold is the extracted text length below which extraction is
-	// retried with progressively less aggressive heuristics. If every attempt
-	// remains below the threshold, the longest non-empty result is returned.
+	// CharThreshold is the extracted text length, in UTF-16 code units, below
+	// which extraction is retried with progressively less aggressive heuristics.
+	// If every attempt remains below the threshold, the longest non-empty result
+	// is returned.
 	// A value of zero disables retries.
 	CharThreshold       int
 	ClassesToPreserve   []string
@@ -53,7 +55,8 @@ type Options struct {
 // A non-nil value is used exactly as supplied. Start with
 // DefaultReaderableOptions when overriding only selected fields.
 type ReaderableOptions struct {
-	MinScore         float64
+	MinScore float64
+	// MinContentLength is measured in UTF-16 code units.
 	MinContentLength int
 }
 

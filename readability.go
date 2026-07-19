@@ -209,7 +209,7 @@ type engineResult struct {
 	HTMLContent string
 	// text content of the article, with all the HTML tags removed
 	TextContent string
-	// length of an article, in characters (runes)
+	// length of an article, in UTF-16 code units
 	Length int
 	// article description, or short excerpt from the content
 	Excerpt string
@@ -602,7 +602,7 @@ func (r *engine) getArticleTitle() string {
 		} else if wordCount(origTitle[:strings.Index(origTitle, ":")]) > 5 {
 			curTitle = origTitle
 		}
-	} else if len([]rune(curTitle)) > 150 || len([]rune(curTitle)) < 15 {
+	} else if characterCount(curTitle) > 150 || characterCount(curTitle) < 15 {
 		var hOnes = elementsByTagName(doc, "h1")
 		if len(hOnes) == 1 {
 			curTitle = r.getInnerText(hOnes[0], true)
@@ -754,7 +754,7 @@ func (r *engine) prepArticle(articleContent *html.Node) {
 	for _, topCandidate := range elementChildren(articleContent) {
 		r.cleanMatchedNodes(topCandidate, func(n *html.Node, matchString string) bool {
 			return shareElements.MatchString(matchString) &&
-				len([]rune(textContent(n))) < shareElementThreshold
+				characterCount(textContent(n)) < shareElementThreshold
 		})
 	}
 
@@ -888,7 +888,7 @@ func (r *engine) textSimilarity(textA, textB string) float64 {
 			uniqTokensB = append(uniqTokensB, t)
 		}
 	}
-	var distanceB = float64(len(strings.Join(uniqTokensB, " "))) / float64(len(strings.Join(tokensB, " ")))
+	var distanceB = float64(characterCount(strings.Join(uniqTokensB, " "))) / float64(characterCount(strings.Join(tokensB, " ")))
 	return 1 - distanceB
 }
 
@@ -1089,7 +1089,7 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 
 			// If this paragraph is less than 25 characters, don't even count it.
 			var innerText = r.getInnerText(elementToScore, true)
-			if len([]rune(innerText)) < 25 {
+			if characterCount(innerText) < 25 {
 				continue
 			}
 
@@ -1109,7 +1109,7 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 			contentScore += float64(articleCommaCount(innerText) + 1)
 
 			// For every 100 characters in this paragraph, add another point. Up to 3 points.
-			contentScore += math.Min(math.Floor(float64(len([]rune(innerText)))/100), 3)
+			contentScore += math.Min(math.Floor(float64(characterCount(innerText))/100), 3)
 
 			for level, ancestor := range ancestors {
 				if tagName(ancestor) == "" || ancestor.Parent == nil || tagName(ancestor.Parent) == "" {
@@ -1306,7 +1306,7 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 				} else if nodeName(sibling) == "P" {
 					var linkDensity = r.getLinkDensity(sibling)
 					var nodeContent = r.getInnerText(sibling, true)
-					var nodeLength = len([]rune(nodeContent))
+					var nodeLength = characterCount(nodeContent)
 
 					if nodeLength > 80 && linkDensity < 0.25 {
 						append = true
@@ -1380,7 +1380,7 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 		// grabArticle with different flags set. This gives us a higher likelihood of
 		// finding the content, and the sieve approach gives us a higher likelihood of
 		// finding the -right- content.
-		var textLength = len(r.getInnerText(articleContent, true))
+		var textLength = characterCount(r.getInnerText(articleContent, true))
 		if textLength < r.options.charThreshold {
 			parseSuccessful = false
 
@@ -1438,7 +1438,7 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 // This verifies that the input is a string, and that the length
 // is less than 100 chars.
 func (r *engine) isValidByline(possibleByline string) bool {
-	bylineLen := len([]rune(strings.TrimSpace(possibleByline)))
+	bylineLen := characterCount(strings.TrimSpace(possibleByline))
 	return bylineLen > 0 && bylineLen < 100
 }
 
@@ -1934,7 +1934,7 @@ func (r *engine) cleanStyles(e *html.Node) {
 // Get the density of links as a percentage of the content
 // This is the amount of text that is inside a link divided by the total text in the node.
 func (r *engine) getLinkDensity(element *html.Node) float64 {
-	textLength := normalizedTextRuneLen(element)
+	textLength := normalizedTextCharacterCount(element)
 	if textLength == 0 {
 		return 0
 	}
@@ -1946,16 +1946,16 @@ func (r *engine) getLinkDensity(element *html.Node) float64 {
 		if href != "" && hashUrl.MatchString(href) {
 			coefficient = 0.3
 		}
-		linkLength += float64(normalizedTextRuneLen(linkNode)) * coefficient
+		linkLength += float64(normalizedTextCharacterCount(linkNode)) * coefficient
 	}
 
 	return linkLength / float64(textLength)
 }
 
-// normalizedTextRuneLen computes the length used by getLinkDensity without
-// materializing textContent (which can otherwise make nested candidates use
-// quadratic amounts of temporary memory).
-func normalizedTextRuneLen(element *html.Node) int {
+// normalizedTextCharacterCount computes the UTF-16 length used by
+// getLinkDensity without materializing textContent (which can otherwise make
+// nested candidates use quadratic amounts of temporary memory).
+func normalizedTextCharacterCount(element *html.Node) int {
 	length, pending, asciiRun := 0, 0, 0
 	started := false
 	walkNodes(element, func(n *html.Node) bool {
@@ -1990,6 +1990,9 @@ func normalizedTextRuneLen(element *html.Node) int {
 			}
 			pending, asciiRun = 0, 0
 			length++
+			if c > 0xffff {
+				length++
+			}
 			started = true
 		}
 		return false
@@ -2206,8 +2209,10 @@ func (r *engine) fixLazyImages(root *html.Node) {
 			// Here we assume if image is less than 100 bytes (or 133B after encoded to base64)
 			// it will be too small, therefore it might be placeholder image.
 			if srcCouldBeRemoved {
-				var b64starts = base64Starts.FindStringIndex(nodeSrc(elem))[0] + 7
-				var b64length = len([]rune(nodeSrc(elem))) - b64starts
+				// FindString returns the complete anchored prefix. Slice with its
+				// byte length before measuring the payload in UTF-16 code units.
+				prefix := b64DataUrl.FindString(nodeSrc(elem))
+				b64length := characterCount(nodeSrc(elem)[len(prefix):])
 				if b64length < 133 {
 					removeAttribute(elem, "src")
 				}
@@ -2261,9 +2266,10 @@ func (r *engine) cleanConditionally(e *html.Node, tag string) {
 	// TODO: Consider taking into account original contentScore here.
 
 	r.removeNodes(r.getAllNodesWithTag(e, tag), func(n *html.Node) bool {
-		// Candidate subtrees overlap heavily. Build this normalized text once and
-		// reuse it for all metrics below instead of rebuilding it repeatedly.
+		// Candidate subtrees overlap heavily. Build this normalized text and its
+		// character count once and reuse them for all metrics below.
 		nodeText := r.getInnerText(n, true)
+		nodeTextLength := characterCount(nodeText)
 
 		// First check if this node IS data table, in which case don't remove it.
 		var isDataTable = func(t *html.Node) bool {
@@ -2275,9 +2281,9 @@ func (r *engine) cleanConditionally(e *html.Node, tag string) {
 			var listLength = 0
 			var listNodes = r.getAllNodesWithTag(n, "ul", "ol")
 			for _, list := range listNodes {
-				listLength += len(r.getInnerText(list, true))
+				listLength += characterCount(r.getInnerText(list, true))
 			}
-			isList = float64(listLength)/float64(len(nodeText)) > 0.9
+			isList = float64(listLength)/float64(nodeTextLength) > 0.9
 		}
 
 		if tag == "table" && isDataTable(n) {
@@ -2313,11 +2319,11 @@ func (r *engine) cleanConditionally(e *html.Node, tag string) {
 			var input = countElementsByTagName(n, "input")
 			var headingLength int
 			for _, heading := range r.getAllNodesWithTag(n, "h1", "h2", "h3", "h4", "h5", "h6") {
-				headingLength += len(r.getInnerText(heading, true))
+				headingLength += characterCount(r.getInnerText(heading, true))
 			}
 			var headingDensity float64
-			if len(nodeText) != 0 {
-				headingDensity = float64(headingLength) / float64(len(nodeText))
+			if nodeTextLength != 0 {
+				headingDensity = float64(headingLength) / float64(nodeTextLength)
 			}
 
 			var embedCount = 0
@@ -2340,7 +2346,7 @@ func (r *engine) cleanConditionally(e *html.Node, tag string) {
 			}
 
 			var linkDensity = r.getLinkDensity(n)
-			var contentLength = utf8.RuneCountInString(nodeText)
+			var contentLength = nodeTextLength
 
 			var haveToRemove = (img > 1 && float64(p)/float64(img) < 0.5 && !r.hasAncestorTag(n, "figure", 3, nil)) ||
 				(!isList && li > p) ||
@@ -2525,7 +2531,7 @@ func (r *engine) Parse() (*engineResult, error) {
 		Lang:          r.articleLang,
 		HTMLContent:   htmlContent,
 		TextContent:   extractedText,
-		Length:        len([]rune(extractedText)),
+		Length:        characterCount(extractedText),
 		Excerpt:       metadata.excerpt,
 		SiteName:      anyOf(metadata.siteName, r.articleSiteName),
 		PublishedTime: metadata.publishedTime,
