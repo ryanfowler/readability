@@ -1,5 +1,7 @@
 # readability
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/ryanfowler/readability.svg)](https://pkg.go.dev/github.com/ryanfowler/readability)
+
 `readability` extracts the main article and its metadata from HTML. It is an idiomatic Go port of [Mozilla Readability](https://github.com/mozilla/readability).
 
 The package can return these values:
@@ -186,4 +188,4 @@ Go parses and serializes the HTML instead of a browser DOM. As a result, attribu
 
 ## License
 
-The project uses the Apache License 2.0. It contains code derived from Mozilla Readability and Arc90 Readability. The pinned Mozilla test fixtures retain their original license.
+The project is licensed under the [MIT License](LICENSE). It contains code derived from Mozilla Readability and Arc90 Readability. The pinned Mozilla test fixtures retain their original license.
