@@ -2,7 +2,10 @@ package readability_test
 
 import (
 	"fmt"
+	"strings"
+
 	"github.com/ryanfowler/readability"
+	"golang.org/x/net/html"
 )
 
 func ExampleParse() {
@@ -18,8 +21,17 @@ func ExampleIsProbablyReaderable() {
 	// Output: false
 }
 
-func ExampleDocument() {
-	d, _ := readability.NewDocument(`<article><h1>News</h1><p>An article body with useful prose for extraction.</p></article>`)
-	fmt.Println(d.IsProbablyReaderable(nil))
+func ExampleParseNode() {
+	doc, _ := html.Parse(strings.NewReader(`<html><head><title>News</title></head><body><article><p>An article body with useful prose for extraction.</p></article></body></html>`))
+	o := readability.DefaultOptions()
+	o.CharThreshold = 0
+	a, _ := readability.ParseNode(doc, "https://example.com/news", &o)
+	fmt.Println(a.Title)
+	// Output: News
+}
+
+func ExampleIsProbablyReaderableNode() {
+	doc, _ := html.Parse(strings.NewReader(`<article><p>An article body with useful prose for extraction.</p></article>`))
+	fmt.Println(readability.IsProbablyReaderableNode(doc, nil))
 	// Output: false
 }

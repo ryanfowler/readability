@@ -117,14 +117,25 @@ type attempt struct {
 //   - options.keepClasses
 //   - options.serializer
 func newEngine(doc *html.Node, uri string, opts ...engineOption) (*engine, error) {
-
 	if doc == nil {
 		return nil, fmt.Errorf("first argument to engine constructor should be a HTML document")
 	}
+	return newEngineWithOriginal(doc, cloneTree(doc), uri, opts...)
+}
 
+// newEngineFromReadOnlyNode uses doc as the immutable retry snapshot and
+// mutates only an internal clone. Callers must not mutate doc while parsing.
+func newEngineFromReadOnlyNode(doc *html.Node, uri string, opts ...engineOption) (*engine, error) {
+	if doc == nil {
+		return nil, fmt.Errorf("first argument to engine constructor should be a HTML document")
+	}
+	return newEngineWithOriginal(cloneTree(doc), doc, uri, opts...)
+}
+
+func newEngineWithOriginal(doc, original *html.Node, uri string, opts ...engineOption) (*engine, error) {
 	r := &engine{
 		options:     defaultOpts(),
-		original:    cloneTree(doc),
+		original:    original,
 		doc:         doc,
 		documentURI: uri,
 		nodeState:   make(map[*html.Node]*nodeData),
@@ -136,9 +147,14 @@ func newEngine(doc *html.Node, uri string, opts ...engineOption) (*engine, error
 	}
 
 	r.body = findElement(r.doc, "body")
-	r.documentElement = findElement(r.doc, "html")
 	if r.body == nil {
 		return nil, fmt.Errorf("cannot parse doc")
+	}
+	r.documentElement = findElement(r.doc, "html")
+	if r.documentElement == nil {
+		// ParseNode also accepts a body-rooted tree. Start extraction at the body
+		// in that case rather than falling directly into the last-resort path.
+		r.documentElement = r.body
 	}
 
 	// Start with all flags set
@@ -2417,7 +2433,11 @@ func (r *engine) resetDocumentForRetry() {
 	r.doc = doc
 	r.body = findElement(doc, "body")
 	r.documentElement = findElement(doc, "html")
+	if r.documentElement == nil {
+		r.documentElement = r.body
+	}
 	clear(r.nodeState)
+	prepareMathJax(r.doc)
 	r.prepareDocumentTree()
 }
 
@@ -2429,6 +2449,10 @@ func (r *engine) resetDocumentForRetry() {
 //  4. Replace the current DOM tree with the new one.
 //  5. Read peacefully.
 func (r *engine) Parse() (*engineResult, error) {
+	// Normalize only the mutable working tree. In particular, ParseNode must
+	// leave the caller's parsed document untouched.
+	prepareMathJax(r.doc)
+
 	// Avoid parsing too large documents, as per configuration option
 	if r.options.maxElemsToParse > 0 {
 		var numTags = countElementsByTagName(r.doc, "*")

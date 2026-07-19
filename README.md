@@ -10,7 +10,20 @@ go get github.com/ryanfowler/readability
 article, err := readability.Parse(source, "https://example.com/story", nil)
 ```
 
-Use `IsProbablyReaderable` for the inexpensive heuristic, or `NewDocument` when checking before extraction. A `Document` can be checked repeatedly, but `Document.Parse` consumes it and returns `ErrDocumentConsumed` on reuse.
+Use `IsProbablyReaderable` for the inexpensive heuristic. If HTML is already parsed with `golang.org/x/net/html`, use `ParseNode` and `IsProbablyReaderableNode` to avoid parsing it again:
+
+```go
+doc, err := html.Parse(strings.NewReader(source))
+if err != nil {
+    // handle error
+}
+if readability.IsProbablyReaderableNode(doc, nil) {
+    article, err := readability.ParseNode(doc, pageURL, nil)
+    // handle article and err
+}
+```
+
+The node APIs do not mutate the supplied tree, so it can be checked or parsed repeatedly. The caller must not mutate it concurrently while either function is running.
 
 `DefaultOptions` and `DefaultReaderableOptions` return independent default values. A non-nil options struct is used exactly as supplied because several zero values are meaningful. To override selected settings, always begin with the relevant defaults:
 
@@ -22,7 +35,9 @@ article, err := readability.Parse(source, pageURL, &opts)
 
 Passing `nil` selects all defaults. Do not use a partially populated literal such as `&readability.Options{CharThreshold: 100}` unless the other zero-valued settings are intentional.
 
-Errors support `errors.Is` for `ErrNoContent`, `ErrNoBody`, `ErrInvalidURL`, and `ErrDocumentConsumed`; use `errors.As` for `*TooManyElementsError`. Relative links and media URLs are resolved against the page URL and document base URL.
+`CharThreshold` controls extraction retries. When an attempt produces less text than the threshold, extraction runs again with progressively less aggressive candidate removal, class weighting, and conditional cleanup. If no attempt reaches the threshold, the longest non-empty result is returned. Set `CharThreshold` to zero to disable retries.
+
+Errors support `errors.Is` for `ErrNoContent`, `ErrNoBody`, and `ErrInvalidURL`; use `errors.As` for `*TooManyElementsError`. Relative links and media URLs are resolved against the page URL and document base URL.
 
 ## Compatibility
 
