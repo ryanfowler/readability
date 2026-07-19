@@ -85,9 +85,13 @@ type nodeData struct {
 }
 
 type engine struct {
-	options         *engineOptions
-	flags           int
-	original        *html.Node
+	options  *engineOptions
+	flags    int
+	original *html.Node
+	// restoreDocument returns a fresh parser-produced tree for extraction
+	// retries. Parse supplies a lazy reparse closure so successful first-pass
+	// extraction does not need an eagerly cloned snapshot.
+	restoreDocument func() *html.Node
 	doc             *html.Node
 	body            *html.Node
 	documentElement *html.Node
@@ -129,6 +133,19 @@ func newEngineFromReadOnlyNode(doc *html.Node, uri string, opts ...engineOption)
 		return nil, fmt.Errorf("first argument to engine constructor should be a HTML document")
 	}
 	return newEngineWithOriginal(cloneTree(doc), doc, uri, opts...)
+}
+
+// newEngineFromOwnedNode may mutate doc. It restores retries with restore,
+// avoiding an eager snapshot when the caller can cheaply recreate the tree.
+func newEngineFromOwnedNode(doc *html.Node, restore func() *html.Node, uri string, opts ...engineOption) (*engine, error) {
+	if doc == nil {
+		return nil, fmt.Errorf("first argument to engine constructor should be a HTML document")
+	}
+	r, err := newEngineWithOriginal(doc, nil, uri, opts...)
+	if err == nil {
+		r.restoreDocument = restore
+	}
+	return r, err
 }
 
 func newEngineWithOriginal(doc, original *html.Node, uri string, opts ...engineOption) (*engine, error) {
@@ -2593,10 +2610,15 @@ func (r *engine) prepareDocumentTree() {
 	r.prepDocument()
 }
 
-// resetDocumentForRetry restores the parser-produced tree without tokenizing
-// or applying source-level HTML rewrites again.
+// resetDocumentForRetry restores the parser-produced tree from either an
+// immutable snapshot or the source-backed restore function.
 func (r *engine) resetDocumentForRetry() {
-	doc := cloneTree(r.original)
+	var doc *html.Node
+	if r.restoreDocument != nil {
+		doc = r.restoreDocument()
+	} else {
+		doc = cloneTree(r.original)
+	}
 	r.doc = doc
 	r.body = findElement(doc, "body")
 	r.documentElement = findElement(doc, "html")

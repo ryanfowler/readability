@@ -83,63 +83,52 @@ func (e *TooManyElementsError) Error() string {
 }
 
 func parseHTML(input string) (*html.Node, error) {
-	// Preserve the no-body error for complete, explicitly head-only documents;
-	// html.Parse otherwise synthesizes a body. Inspect tokens rather than source
-	// substrings so <header> and text/attributes containing "<body" do not count.
-	var hasHTML, hasHead, hasBody bool
-	tokenizer := html.NewTokenizer(strings.NewReader(input))
-scanTags:
-	for {
-		tokenType := tokenizer.Next()
-		if tokenType == html.ErrorToken {
-			break
-		}
-		if tokenType != html.StartTagToken && tokenType != html.SelfClosingTagToken {
-			continue
-		}
-		name, _ := tokenizer.TagName() // TagName is normalized to lower case.
-		switch string(name) {
-		case "html":
-			hasHTML = true
-		case "head":
-			hasHead = true
-		case "body":
-			hasBody = true
-			// A body tag settles the only question this preliminary scan is
-			// needed for. Avoid tokenizing the (usually much larger) body twice.
-			break scanTags
-		}
-	}
 	doc, err := html.Parse(strings.NewReader(input))
 	if err != nil {
 		return nil, err
 	}
-	var bodyNode *html.Node
-	var walk func(*html.Node)
-	walk = func(n *html.Node) {
-		if n.Type == html.ElementNode && n.Data == "body" {
-			bodyNode = n
-		}
-		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			walk(c)
-		}
-	}
-	walk(doc)
+	bodyNode := findElement(doc, "body")
 	if bodyNode == nil {
 		return nil, ErrNoBody
 	}
-	if hasHTML && hasHead && !hasBody {
-		// An omitted body tag is valid when content follows the head. Only retain
-		// ErrNoBody for a genuinely head-only complete document.
-		hasBodyContent := false
-		for child := bodyNode.FirstChild; child != nil; child = child.NextSibling {
-			if child.Type == html.ElementNode ||
-				(child.Type == html.TextNode && strings.TrimSpace(child.Data) != "") {
-				hasBodyContent = true
+	// html.Parse synthesizes a body. Only an empty synthesized body is
+	// ambiguous, so avoid tokenizing every normal document a second time.
+	hasBodyContent := false
+	for child := bodyNode.FirstChild; child != nil; child = child.NextSibling {
+		if child.Type == html.ElementNode ||
+			(child.Type == html.TextNode && strings.TrimSpace(child.Data) != "") {
+			hasBodyContent = true
+			break
+		}
+	}
+	if !hasBodyContent {
+		// Preserve ErrNoBody for complete, explicitly head-only documents.
+		// Inspect tokens rather than substrings so <header> and text or attributes
+		// containing "<body" do not count.
+		var hasHTML, hasHead, hasBody bool
+		tokenizer := html.NewTokenizer(strings.NewReader(input))
+		for {
+			tokenType := tokenizer.Next()
+			if tokenType == html.ErrorToken {
+				break
+			}
+			if tokenType != html.StartTagToken && tokenType != html.SelfClosingTagToken {
+				continue
+			}
+			name, _ := tokenizer.TagName()
+			switch string(name) {
+			case "html":
+				hasHTML = true
+			case "head":
+				hasHead = true
+			case "body":
+				hasBody = true
+			}
+			if hasBody {
 				break
 			}
 		}
-		if !hasBodyContent {
+		if hasHTML && hasHead && !hasBody {
 			return nil, ErrNoBody
 		}
 	}
@@ -153,7 +142,14 @@ func Parse(input, pageURL string, options *Options) (*Article, error) {
 	if err != nil {
 		return nil, err
 	}
-	return parseNode(root, pageURL, options, false)
+	// The parsed tree is owned by this call, so extraction can mutate it. If a
+	// retry is needed, recreate the pristine tree lazily instead of cloning every
+	// document up front. strings.Reader cannot make html.Parse fail.
+	restore := func() *html.Node {
+		doc, _ := html.Parse(strings.NewReader(input))
+		return doc
+	}
+	return parseNode(root, pageURL, options, false, restore)
 }
 
 // ParseNode extracts an article from an already parsed HTML tree. Root may be
@@ -162,10 +158,10 @@ func Parse(input, pageURL string, options *Options) (*Article, error) {
 // is running. If pageURL is non-empty, it must be an absolute HTTP or HTTPS
 // URL with a host.
 func ParseNode(root *html.Node, pageURL string, options *Options) (*Article, error) {
-	return parseNode(root, pageURL, options, true)
+	return parseNode(root, pageURL, options, true, nil)
 }
 
-func parseNode(root *html.Node, pageURL string, options *Options, cloneInput bool) (*Article, error) {
+func parseNode(root *html.Node, pageURL string, options *Options, cloneInput bool, restore func() *html.Node) (*Article, error) {
 	if root == nil || findElement(root, "body") == nil {
 		return nil, ErrNoBody
 	}
@@ -213,7 +209,7 @@ func parseNode(root *html.Node, pageURL string, options *Options, cloneInput boo
 	if cloneInput {
 		e, err = newEngineFromReadOnlyNode(root, pageURL, configure)
 	} else {
-		e, err = newEngine(root, pageURL, configure)
+		e, err = newEngineFromOwnedNode(root, restore, pageURL, configure)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrNoContent, err)
