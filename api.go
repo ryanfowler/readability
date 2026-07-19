@@ -146,7 +146,8 @@ scanTags:
 	return doc, nil
 }
 
-// Parse extracts an article from HTML source.
+// Parse extracts an article from HTML source. If pageURL is non-empty, it
+// must be an absolute HTTP or HTTPS URL with a host.
 func Parse(input, pageURL string, options *Options) (*Article, error) {
 	root, err := parseHTML(input)
 	if err != nil {
@@ -158,7 +159,8 @@ func Parse(input, pageURL string, options *Options) (*Article, error) {
 // ParseNode extracts an article from an already parsed HTML tree. Root may be
 // a complete document or a body-rooted tree. It is not mutated, but must
 // contain a body element and must not be mutated concurrently while ParseNode
-// is running.
+// is running. If pageURL is non-empty, it must be an absolute HTTP or HTTPS
+// URL with a host.
 func ParseNode(root *html.Node, pageURL string, options *Options) (*Article, error) {
 	return parseNode(root, pageURL, options, true)
 }
@@ -168,8 +170,13 @@ func parseNode(root *html.Node, pageURL string, options *Options, cloneInput boo
 		return nil, ErrNoBody
 	}
 	if pageURL != "" {
-		if _, err := url.ParseRequestURI(pageURL); err != nil {
+		page, err := url.ParseRequestURI(pageURL)
+		if err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrInvalidURL, err)
+		}
+		if !page.IsAbs() || page.Hostname() == "" ||
+			(!strings.EqualFold(page.Scheme, "http") && !strings.EqualFold(page.Scheme, "https")) {
+			return nil, fmt.Errorf("%w: page URL must be an absolute HTTP or HTTPS URL with a host", ErrInvalidURL)
 		}
 	}
 	o := DefaultOptions()

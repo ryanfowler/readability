@@ -462,13 +462,39 @@ func (r *engine) fixRelativeUris(articleContent *html.Node) {
 		return abs
 	}
 
+	parseScheme := func(uri string) string {
+		parsed, err := url.Parse(uri)
+		if err == nil {
+			return parsed.Scheme
+		}
+		// A malformed escape elsewhere in the URI must not hide a valid scheme.
+		if colon := strings.IndexByte(uri, ':'); colon >= 0 {
+			if parsed, err = url.Parse(uri[:colon+1]); err == nil {
+				return parsed.Scheme
+			}
+		}
+		return ""
+	}
+
 	var links = r.getAllNodesWithTag(articleContent, "a")
 	for _, link := range links {
 		var href = getAttribute(link, "href")
 		if href != "" {
+			// Browsers remove ASCII tabs and newlines from URLs before parsing,
+			// including when they occur inside a scheme. Apply the same preprocessing
+			// before checking the case-insensitive scheme.
+			normalizedHref := strings.Map(func(r rune) rune {
+				switch r {
+				case '\t', '\n', '\r':
+					return -1
+				default:
+					return r
+				}
+			}, strings.TrimSpace(href))
+
 			// Remove links with javascript: URIs, since
 			// they won't work after scripts have been removed from the page.
-			if strings.HasPrefix(href, "javascript:") {
+			if strings.EqualFold(parseScheme(normalizedHref), "javascript") {
 				// if the link only contains simple text content, it can be converted to a text node
 				if len(childNodes(link)) == 1 && childNodes(link)[0].Type == html.TextNode {
 					var text = &html.Node{Type: html.TextNode, Data: textContent(link)}
