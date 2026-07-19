@@ -11,78 +11,118 @@ import (
 	"golang.org/x/net/html"
 )
 
-// Article is the extracted article and metadata. Content and Node are
-// unsanitized. Node is the parsed element whose inner HTML is Content.
+// Article contains the extracted article and its metadata.
+//
+// Content and Node can contain unsafe HTML. Sanitize them before you add them
+// to a web page. Metadata fields are empty when the source does not supply a
+// value.
 type Article struct {
-	Title   string `json:"title"`
-	Byline  string `json:"byline"`
-	Dir     string `json:"dir"`
-	Lang    string `json:"lang"`
+	// Title is the article title.
+	Title string `json:"title"`
+	// Byline identifies the article author.
+	Byline string `json:"byline"`
+	// Dir is the text direction, such as "ltr" or "rtl".
+	Dir string `json:"dir"`
+	// Lang is the article language from the document metadata.
+	Lang string `json:"lang"`
+	// Content is the processed inner HTML of Node. It is not sanitized.
 	Content string `json:"content"`
-	// Node is the extracted article as a parsed HTML node. It is omitted from
-	// JSON because html.Node contains cyclic links.
+	// Node is the processed article element. Its inner HTML is Content when the
+	// package returns the Article. Node is not included in JSON because an
+	// html.Node contains cyclic links.
 	Node *html.Node `json:"-"`
-	// TextContent is plain text with whitespace collapsed to single spaces,
-	// except inside preformatted elements.
+	// TextContent is the article text. It uses one space for each normal
+	// whitespace sequence. It retains whitespace in preformatted elements.
 	TextContent string `json:"textContent"`
 	// Length is the length of TextContent in UTF-16 code units.
-	Length        int    `json:"length"`
-	Excerpt       string `json:"excerpt"`
-	SiteName      string `json:"siteName"`
+	Length int `json:"length"`
+	// Excerpt is the article description or a short extract from the content.
+	Excerpt string `json:"excerpt"`
+	// SiteName is the name of the source site.
+	SiteName string `json:"siteName"`
+	// PublishedTime is the publication time from the document metadata. The
+	// package does not change its source format.
 	PublishedTime string `json:"publishedTime"`
 }
 
 // Options controls article extraction.
 //
-// A non-nil Options value is used exactly as supplied; zero values can be
-// meaningful (for example MaxElemsToParse == 0 disables the element limit).
-// Callers that only want to override selected settings must start with
-// DefaultOptions and then change those fields. Passing nil uses all defaults.
+// Pass nil to Parse or ParseNode to use the defaults. To change selected
+// fields, first call DefaultOptions and then change the returned value. A
+// non-nil Options value supplies all options. Zero values have a function. A
+// nil AllowedVideoRegex is the exception; it selects the built-in allowlist.
 type Options struct {
+	// MaxElemsToParse is the maximum number of HTML elements that extraction
+	// accepts. Zero removes the limit.
 	MaxElemsToParse int
+	// NbTopCandidates is the number of top article candidates to compare.
 	NbTopCandidates int
-	// CharThreshold is the extracted text length, in UTF-16 code units, below
-	// which extraction is retried with progressively less aggressive heuristics.
-	// If every attempt remains below the threshold, the longest non-empty result
-	// is returned.
-	// A value of zero disables retries.
-	CharThreshold       int
-	ClassesToPreserve   []string
-	KeepClasses         bool
-	DisableJSONLD       bool
-	AllowedVideoRegex   *regexp.Regexp
+	// CharThreshold is the minimum result length in UTF-16 code units. The
+	// package retries extraction if the result is shorter. Each retry uses less
+	// strict cleanup rules. If all results are too short, the package returns the
+	// longest nonempty result. Zero prevents retries.
+	CharThreshold int
+	// ClassesToPreserve lists the CSS classes to retain during class cleanup.
+	// This field has no effect when KeepClasses is true.
+	ClassesToPreserve []string
+	// KeepClasses retains all CSS classes when it is true.
+	KeepClasses bool
+	// DisableJSONLD prevents metadata extraction from JSON-LD when it is true.
+	DisableJSONLD bool
+	// AllowedVideoRegex identifies video URLs that cleanup can retain. A nil
+	// value selects the built-in allowlist.
+	AllowedVideoRegex *regexp.Regexp
+	// LinkDensityModifier changes the link-density limits that the cleanup rules
+	// use to remove a candidate.
 	LinkDensityModifier float64
-	// Logger receives extraction logs. If nil, logging is disabled.
+	// Logger receives extraction log records. A nil value turns logs off. The
+	// package does not use the global slog logger.
 	Logger *slog.Logger
-	Debug  bool
+	// Debug enables additional verbose log records. Logger must be non-nil to
+	// receive these records.
+	Debug bool
 }
 
-// ReaderableOptions controls the inexpensive readerability heuristic.
-// A non-nil value is used exactly as supplied. Start with
-// DefaultReaderableOptions when overriding only selected fields.
+// ReaderableOptions controls the fast readerability heuristic.
+//
+// Pass nil to a readerability function to use the defaults. To change selected
+// fields, first call DefaultReaderableOptions and then change the returned
+// value. A non-nil ReaderableOptions value supplies all options.
 type ReaderableOptions struct {
+	// MinScore is the score that the document must exceed.
 	MinScore float64
-	// MinContentLength is measured in UTF-16 code units.
+	// MinContentLength is the minimum candidate length in UTF-16 code units.
 	MinContentLength int
 }
 
-// DefaultOptions returns an independent Options value with Mozilla defaults.
+// DefaultOptions returns an Options value with the Mozilla defaults.
 func DefaultOptions() Options {
 	return Options{NbTopCandidates: 5, CharThreshold: 500, ClassesToPreserve: []string{"page"}, AllowedVideoRegex: videos}
 }
 
-// DefaultReaderableOptions returns the Mozilla readerability defaults.
+// DefaultReaderableOptions returns a ReaderableOptions value with the Mozilla
+// defaults.
 func DefaultReaderableOptions() ReaderableOptions {
 	return ReaderableOptions{MinScore: 20, MinContentLength: 140}
 }
 
 var (
-	ErrNoContent  = errors.New("readability: no content")
-	ErrNoBody     = errors.New("readability: document has no body")
+	// ErrNoContent means that extraction did not produce article content.
+	ErrNoContent = errors.New("readability: no content")
+	// ErrNoBody means that the supplied HTML tree does not have a body element.
+	ErrNoBody = errors.New("readability: document has no body")
+	// ErrInvalidURL means that the nonempty page URL is not an absolute HTTP or
+	// HTTPS URL with a host.
 	ErrInvalidURL = errors.New("readability: invalid URL")
 )
 
-type TooManyElementsError struct{ Count, Max int }
+// TooManyElementsError reports that a document exceeds MaxElemsToParse.
+type TooManyElementsError struct {
+	// Count is the number of elements in the document.
+	Count int
+	// Max is the configured maximum number of elements.
+	Max int
+}
 
 func (e *TooManyElementsError) Error() string {
 	return fmt.Sprintf("readability: %d elements exceeds maximum %d", e.Count, e.Max)
@@ -141,8 +181,15 @@ func parseHTML(input string) (*html.Node, error) {
 	return doc, nil
 }
 
-// Parse extracts an article from HTML source. If pageURL is non-empty, it
-// must be an absolute HTTP or HTTPS URL with a host.
+// Parse extracts an article from input.
+//
+// pageURL can be empty. If it is not empty, it must be an absolute HTTP or
+// HTTPS URL with a host. Parse uses pageURL and the document base URL to
+// resolve relative links and media URLs.
+//
+// Pass nil for options to use the defaults. Parse returns an error that
+// supports errors.Is with ErrNoBody, ErrInvalidURL, or ErrNoContent. It can
+// also return a *TooManyElementsError.
 func Parse(input, pageURL string, options *Options) (*Article, error) {
 	root, err := parseHTML(input)
 	if err != nil {
@@ -158,11 +205,18 @@ func Parse(input, pageURL string, options *Options) (*Article, error) {
 	return parseNode(root, pageURL, options, false, restore)
 }
 
-// ParseNode extracts an article from an already parsed HTML tree. Root may be
-// a complete document or a body-rooted tree. It is not mutated, but must
-// contain a body element and must not be mutated concurrently while ParseNode
-// is running. If pageURL is non-empty, it must be an absolute HTTP or HTTPS
-// URL with a host.
+// ParseNode extracts an article from a parsed HTML tree.
+//
+// root can be a complete document or a tree with a body root. ParseNode does
+// not change root. The caller must not change root while ParseNode uses it.
+//
+// pageURL can be empty. If it is not empty, it must be an absolute HTTP or
+// HTTPS URL with a host. ParseNode uses pageURL and the document base URL to
+// resolve relative links and media URLs.
+//
+// Pass nil for options to use the defaults. ParseNode returns an error that
+// supports errors.Is with ErrNoBody, ErrInvalidURL, or ErrNoContent. It can
+// also return a *TooManyElementsError.
 func ParseNode(root *html.Node, pageURL string, options *Options) (*Article, error) {
 	return parseNode(root, pageURL, options, true, nil)
 }
@@ -193,7 +247,7 @@ func parseNode(root *html.Node, pageURL string, options *Options, cloneInput boo
 			return false
 		})
 		if count > o.MaxElemsToParse {
-			return nil, &TooManyElementsError{count, o.MaxElemsToParse}
+			return nil, &TooManyElementsError{Count: count, Max: o.MaxElemsToParse}
 		}
 	}
 	configure := func(x *engineOptions) {
@@ -239,17 +293,24 @@ func parseNode(root *html.Node, pageURL string, options *Options, cloneInput boo
 	}, nil
 }
 
-// IsProbablyReaderable reports whether HTML source is likely to contain an
-// article.
+// IsProbablyReaderable reports whether input is likely to contain an article.
+//
+// This function applies a fast heuristic. It does not extract the article. It
+// returns false if it cannot parse a document body. Pass nil for options to
+// use the defaults.
 func IsProbablyReaderable(input string, options *ReaderableOptions) bool {
 	root, err := parseHTML(input)
 	return err == nil && IsProbablyReaderableNode(root, options)
 }
 
-// IsProbablyReaderableNode reports whether an already parsed HTML tree is
-// likely to contain an article. Root may be a complete document or a
-// body-rooted tree. It is not mutated, but must contain a body element and must
-// not be mutated concurrently while this function is running.
+// IsProbablyReaderableNode reports whether a parsed HTML tree is likely to
+// contain an article.
+//
+// This function applies a fast heuristic. It does not extract the article.
+// root can be a complete document or a tree with a body root. The function
+// returns false if root is nil or has no body element. It does not change root.
+// The caller must not change root while the function uses it. Pass nil for
+// options to use the defaults.
 func IsProbablyReaderableNode(root *html.Node, options *ReaderableOptions) bool {
 	if root == nil || findElement(root, "body") == nil {
 		return false
