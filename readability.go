@@ -111,14 +111,8 @@ type attempt struct {
 	textLength     int
 }
 
-// New is the public constructor of engine and it supports the following options:
-//   - options.debug
-//   - options.maxElemsToParse
-//   - options.nbTopCandidates
-//   - options.charThreshold
-//   - this.classesToPreseve
-//   - options.keepClasses
-//   - options.serializer
+// newEngine creates an engine with a private copy of doc. The engine can use
+// the original tree to restore the document for an extraction retry.
 func newEngine(doc *html.Node, uri string, opts ...engineOption) (*engine, error) {
 	if doc == nil {
 		return nil, fmt.Errorf("first argument to engine constructor should be a HTML document")
@@ -2638,13 +2632,8 @@ func (r *engine) resetDocumentForRetry() {
 	r.prepareDocumentTree()
 }
 
-// Runs readability.
-// Workflow:
-//  1. Prep the document by removing script tags, css, etc.
-//  2. Build readability's DOM tree.
-//  3. Grab the article content from the current dom tree.
-//  4. Replace the current DOM tree with the new one.
-//  5. Read peacefully.
+// Parse prepares the document, extracts the main article, and returns the
+// article with its metadata.
 func (r *engine) Parse() (*engineResult, error) {
 	// Normalize only the mutable working tree. In particular, ParseNode must
 	// leave the caller's parsed document untouched.

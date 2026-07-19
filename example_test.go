@@ -9,29 +9,65 @@ import (
 )
 
 func ExampleParse() {
-	o := readability.DefaultOptions()
-	o.CharThreshold = 0
-	a, _ := readability.Parse(`<html><head><title>Hello</title></head><body><article><h1>Hello</h1><p>This is a sufficiently useful article paragraph.</p></article></body></html>`, "https://example.com/", &o)
-	fmt.Println(a.Title)
+	const source = `<html>
+<head><title>Hello</title></head>
+<body><article><h1>Hello</h1><p>This is a useful article paragraph.</p></article></body>
+</html>`
+
+	options := readability.DefaultOptions()
+	options.CharThreshold = 0
+	article, err := readability.Parse(source, "https://example.com/", &options)
+	if err != nil {
+		fmt.Println("error:", err)
+		return
+	}
+
+	fmt.Println(article.Title)
 	// Output: Hello
 }
 
 func ExampleIsProbablyReaderable() {
-	fmt.Println(readability.IsProbablyReaderable(`<article><p>short</p></article>`, nil))
+	source := `<article><p>short</p></article>`
+	fmt.Println(readability.IsProbablyReaderable(source, nil))
 	// Output: false
 }
 
 func ExampleParseNode() {
-	doc, _ := html.Parse(strings.NewReader(`<html><head><title>News</title></head><body><article><p>An article body with useful prose for extraction.</p></article></body></html>`))
-	o := readability.DefaultOptions()
-	o.CharThreshold = 0
-	a, _ := readability.ParseNode(doc, "https://example.com/news", &o)
-	fmt.Println(a.Title)
+	const source = `<html>
+<head><title>News</title></head>
+<body><article><p>An article body with useful prose.</p></article></body>
+</html>`
+
+	document, err := html.Parse(strings.NewReader(source))
+	if err != nil {
+		fmt.Println("error:", err)
+		return
+	}
+
+	options := readability.DefaultOptions()
+	options.CharThreshold = 0
+	article, err := readability.ParseNode(
+		document,
+		"https://example.com/news",
+		&options,
+	)
+	if err != nil {
+		fmt.Println("error:", err)
+		return
+	}
+
+	fmt.Println(article.Title)
 	// Output: News
 }
 
 func ExampleIsProbablyReaderableNode() {
-	doc, _ := html.Parse(strings.NewReader(`<article><p>An article body with useful prose for extraction.</p></article>`))
-	fmt.Println(readability.IsProbablyReaderableNode(doc, nil))
+	source := `<article><p>An article body with useful prose.</p></article>`
+	document, err := html.Parse(strings.NewReader(source))
+	if err != nil {
+		fmt.Println("error:", err)
+		return
+	}
+
+	fmt.Println(readability.IsProbablyReaderableNode(document, nil))
 	// Output: false
 }

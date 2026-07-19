@@ -41,11 +41,9 @@ func isNodeVisible(node *html.Node) bool {
 			(attr(node, "class") != "" && strings.Contains(attr(node, "class"), "fallback-image")))
 }
 
-// Decides whether or not the document is reader-able without parsing the whole thing.
-// engineOptions:
-//   - options.minContentLength (default 140), the minimum node content length used to decide if the document is readerable
-//   - options.minScore (default 20), the minumum cumulated 'score' used to determine if the document is readerable
-//   - options.visibilityChecker (default isNodeVisible), the function used to determine if a node is visible
+// isProbablyReaderable applies the fast readerability heuristic to doc.
+// minContentLength sets the minimum candidate length. minScore sets the score
+// that the document must exceed. visibilityChecker identifies visible nodes.
 func isProbablyReaderable(doc *html.Node, opts ...engineOption) bool {
 	options := defaultOpts()
 	for _, opt := range opts {
