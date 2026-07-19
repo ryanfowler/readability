@@ -72,6 +72,40 @@ func lastChild(n *html.Node) *html.Node {
 	}
 	return n.LastChild
 }
+
+// singleElementChild returns the only direct element child without
+// materializing an elementChildren slice.
+func singleElementChild(n *html.Node) (*html.Node, bool) {
+	var only *html.Node
+	if n != nil {
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			if c.Type != html.ElementNode {
+				continue
+			}
+			if only != nil {
+				return nil, false
+			}
+			only = c
+		}
+	}
+	return only, only != nil
+}
+
+func hasMultipleElementChildren(n *html.Node) bool {
+	seen := false
+	if n != nil {
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			if c.Type == html.ElementNode {
+				if seen {
+					return true
+				}
+				seen = true
+			}
+		}
+	}
+	return false
+}
+
 func firstElementChild(n *html.Node) *html.Node {
 	if n != nil {
 		for c := n.FirstChild; c != nil; c = c.NextSibling {

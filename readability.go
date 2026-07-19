@@ -496,8 +496,8 @@ func (r *engine) fixRelativeUris(articleContent *html.Node) {
 			// they won't work after scripts have been removed from the page.
 			if strings.EqualFold(parseScheme(normalizedHref), "javascript") {
 				// if the link only contains simple text content, it can be converted to a text node
-				if len(childNodes(link)) == 1 && childNodes(link)[0].Type == html.TextNode {
-					var text = &html.Node{Type: html.TextNode, Data: textContent(link)}
+				if link.FirstChild != nil && link.FirstChild == link.LastChild && link.FirstChild.Type == html.TextNode {
+					var text = &html.Node{Type: html.TextNode, Data: link.FirstChild.Data}
 					replaceChild(link.Parent, text, link)
 				} else {
 					// if the link has multiple children, they should all be preserved
@@ -558,7 +558,7 @@ func (r *engine) simplifyNestedElements(articleContent *html.Node) {
 				node = r.removeAndGetNext(node)
 				continue
 			} else if r.hasSingleTagInsideElement(node, "DIV") || r.hasSingleTagInsideElement(node, "SECTION") {
-				var child = elementChildren(node)[0]
+				child, _ := singleElementChild(node)
 				for _, a := range node.Attr {
 					setAttribute(child, a.Key, a.Val)
 				}
@@ -777,11 +777,13 @@ func (r *engine) prepArticle(articleContent *html.Node) {
 	// Clean out elements with little content that have "share" in their id/class combinations from final top candidates,
 	// which means we don't remove the top candidates even they have "share".
 	var shareElementThreshold = defaultCharThreshold
-	for _, topCandidate := range elementChildren(articleContent) {
+	for topCandidate := firstElementChild(articleContent); topCandidate != nil; {
+		next := nextElementSibling(topCandidate)
 		r.cleanMatchedNodes(topCandidate, func(n *html.Node, matchString string) bool {
 			return shareElements.MatchString(matchString) &&
 				characterCount(textContent(n)) < shareElementThreshold
 		})
+		topCandidate = next
 	}
 
 	r.clean(articleContent, "iframe")
@@ -802,13 +804,17 @@ func (r *engine) prepArticle(articleContent *html.Node) {
 
 	// Remove extra paragraphs
 	r.removeNodes(r.getAllNodesWithTag(articleContent, "p"), func(paragraph *html.Node) bool {
-		var imgCount = countElementsByTagName(paragraph, "img")
-		var embedCount = countElementsByTagName(paragraph, "embed")
-		var objectCount = countElementsByTagName(paragraph, "object")
-		// At this point, nasty iframes have been removed, only remain embedded video ones.
-		var iframeCount = countElementsByTagName(paragraph, "iframe")
-		var totalCount = imgCount + embedCount + objectCount + iframeCount
-		return totalCount == 0 && r.getInnerText(paragraph, false) == ""
+		mediaCount := 0
+		walkNodes(paragraph, func(n *html.Node) bool {
+			if n != paragraph && n.Type == html.ElementNode {
+				switch n.Data {
+				case "img", "embed", "object", "iframe":
+					mediaCount++
+				}
+			}
+			return false
+		})
+		return mediaCount == 0 && r.getInnerText(paragraph, false) == ""
 	})
 
 	for _, br := range r.getAllNodesWithTag(articleContent, "br") {
@@ -831,7 +837,14 @@ func (r *engine) prepArticle(articleContent *html.Node) {
 			if r.hasSingleTagInsideElement(row, "TD") {
 				var cell = firstElementChild(row)
 				var tag = "DIV"
-				if r.everyNode(childNodes(cell), r.isPhrasingContent) {
+				allPhrasing := true
+				for child := cell.FirstChild; child != nil; child = child.NextSibling {
+					if !r.isPhrasingContent(child) {
+						allPhrasing = false
+						break
+					}
+				}
+				if allPhrasing {
 					tag = "P"
 				}
 				cell = r.setNodeTag(cell, tag)
@@ -1091,7 +1104,7 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 				// safely converted into plain P elements to avoid confusing the scoring
 				// algorithm with DIVs with are, in practice, paragraphs.
 				if r.hasSingleTagInsideElement(n, "P") && r.getLinkDensity(n) < 0.25 {
-					var newNode = elementChildren(n)[0]
+					newNode, _ := singleElementChild(n)
 					replaceChild(n.Parent, newNode, n)
 					n = newNode
 					elementsToScore = append(elementsToScore, n)
@@ -1288,7 +1301,10 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 			// If the top candidate is the only child, use parent instead. This will help sibling
 			// joining logic when adjacent content is actually located in parent's sibling node.
 			parentOfTopCandidate = topCandidate.Parent
-			for tagName(parentOfTopCandidate) != "BODY" && len(elementChildren(parentOfTopCandidate)) == 1 {
+			for tagName(parentOfTopCandidate) != "BODY" {
+				if _, ok := singleElementChild(parentOfTopCandidate); !ok {
+					break
+				}
 				topCandidate = parentOfTopCandidate
 				parentOfTopCandidate = topCandidate.Parent
 			}
@@ -1307,10 +1323,8 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 		var siblingScoreThreshold = math.Max(10, r.data(topCandidate).contentScore*0.2)
 		// Keep potential top candidate's parent node to try to get text direction of it later.
 		parentOfTopCandidate = topCandidate.Parent
-		var siblings = elementChildren(parentOfTopCandidate)
-		var sl = len(siblings)
-		for s := 0; s < sl; s++ {
-			var sibling = siblings[s]
+		for sibling := firstElementChild(parentOfTopCandidate); sibling != nil; {
+			nextSibling := nextElementSibling(sibling)
 			var append = false
 
 			if r.options.debug {
@@ -1357,16 +1371,8 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 				}
 
 				appendChild(articleContent, sibling)
-				// Fetch children again to make it compatible
-				// with DOM parsers without live collection support.
-				siblings = elementChildren(parentOfTopCandidate)
-				// siblings is a reference to the children array, and
-				// sibling is removed from the array when we call appendChild().
-				// As a result, we must revisit this index since the nodes
-				// have been shifted.
-				s -= 1
-				sl -= 1
 			}
+			sibling = nextSibling
 		}
 
 		if r.options.debug {
@@ -1704,10 +1710,11 @@ func (r *engine) isSingleImage(n *html.Node) bool {
 		return true
 	}
 
-	if len(elementChildren(n)) != 1 || strings.TrimSpace(textContent(n)) != "" {
+	child, ok := singleElementChild(n)
+	if !ok || strings.TrimSpace(textContent(n)) != "" {
 		return false
 	}
-	return r.isSingleImage(elementChildren(n)[0])
+	return r.isSingleImage(child)
 }
 
 // Find all <noscript> that are located after <img> nodes, and which contain only one
@@ -1794,16 +1801,19 @@ func (r *engine) removeScripts(doc *html.Node) {
 // Returns false if the DIV node contains non-empty text nodes
 // or if it contains no element with given tag or more than 1 element.
 func (r *engine) hasSingleTagInsideElement(element *html.Node, tag string) bool {
-	// There should be exactly 1 element child with given tag
-	if len(elementChildren(element)) != 1 || tagName(elementChildren(element)[0]) != tag {
+	// There should be exactly 1 element child with given tag.
+	child, ok := singleElementChild(element)
+	if !ok || tagName(child) != tag {
 		return false
 	}
 
-	// And there should be no text nodes with real content
-	return !r.someNode(childNodes(element), func(n *html.Node) bool {
-		return n.Type == html.TextNode &&
-			hasContent.MatchString(textContent(n))
-	})
+	// And there should be no direct text nodes with real content.
+	for n := element.FirstChild; n != nil; n = n.NextSibling {
+		if n.Type == html.TextNode && hasContent.MatchString(n.Data) {
+			return false
+		}
+	}
+	return true
 }
 
 func (r *engine) isElementWithoutContent(n *html.Node) bool {
@@ -1850,18 +1860,29 @@ func hasNonWhitespaceText(n *html.Node) bool {
 
 // Determine whether element has any children block level elements.
 func (r *engine) hasChildBlockElement(element *html.Node) bool {
-	return r.someNode(childNodes(element), func(n *html.Node) bool {
-		return slices.Contains(divToPElemns, tagName(n)) ||
-			r.hasChildBlockElement(n)
-	})
+	for n := element.FirstChild; n != nil; n = n.NextSibling {
+		if slices.Contains(divToPElemns, tagName(n)) || r.hasChildBlockElement(n) {
+			return true
+		}
+	}
+	return false
 }
 
 // Determine if a node qualifies as phrasing content.
 // see: https://developer.mozilla.org/en-US/docs/Web/Guide/HTML/Content_categories#Phrasing_content
 func (r *engine) isPhrasingContent(n *html.Node) bool {
-	return n.Type == html.TextNode || slices.Contains(phrasingElems, tagName(n)) ||
-		((tagName(n) == "A" || tagName(n) == "DEL" || tagName(n) == "INS") &&
-			r.everyNode(childNodes(n), r.isPhrasingContent))
+	if n.Type == html.TextNode || slices.Contains(phrasingElems, tagName(n)) {
+		return true
+	}
+	if tag := tagName(n); tag == "A" || tag == "DEL" || tag == "INS" {
+		for child := n.FirstChild; child != nil; child = child.NextSibling {
+			if !r.isPhrasingContent(child) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 func (r *engine) isWhitespace(n *html.Node) bool {
@@ -1960,70 +1981,102 @@ func (r *engine) cleanStyles(e *html.Node) {
 // Get the density of links as a percentage of the content
 // This is the amount of text that is inside a link divided by the total text in the node.
 func (r *engine) getLinkDensity(element *html.Node) float64 {
-	textLength := normalizedTextCharacterCount(element)
-	if textLength == 0 {
+	// Count the element text and every link's text in the same walk. The old
+	// implementation first walked the whole subtree, materialized a slice of
+	// links, and then walked each link subtree again.
+	var total normalizedTextCounter
+	// Nested anchors are invalid HTML and the parser normally prevents them.
+	// Keep the common stack inline so density calculation remains allocation-free.
+	var linkStack [4]linkTextCounter
+	links := linkStack[:0]
+	var linkLength float64
+	var visit func(*html.Node)
+	visit = func(n *html.Node) {
+		isLink := n != element && n.Type == html.ElementNode && n.Data == "a"
+		if isLink {
+			coefficient := 1.0
+			if href := getAttribute(n, "href"); href != "" && hashUrl.MatchString(href) {
+				coefficient = 0.3
+			}
+			links = append(links, linkTextCounter{coefficient: coefficient})
+		}
+		if n.Type == html.TextNode {
+			total.add(n.Data)
+			for i := range links {
+				links[i].text.add(n.Data)
+			}
+		}
+		for child := n.FirstChild; child != nil; child = child.NextSibling {
+			visit(child)
+		}
+		if isLink {
+			last := len(links) - 1
+			linkLength += float64(links[last].text.length) * links[last].coefficient
+			links = links[:last]
+		}
+	}
+	visit(element)
+	if total.length == 0 {
 		return 0
 	}
+	return linkLength / float64(total.length)
+}
 
-	var linkLength float64
-	for _, linkNode := range elementsByTagName(element, "a") {
-		href := getAttribute(linkNode, "href")
-		coefficient := 1.0
-		if href != "" && hashUrl.MatchString(href) {
-			coefficient = 0.3
+type linkTextCounter struct {
+	text        normalizedTextCounter
+	coefficient float64
+}
+
+type normalizedTextCounter struct {
+	length, pending, asciiRun int
+	started                   bool
+}
+
+func (c *normalizedTextCounter) add(s string) {
+	for i := 0; i < len(s); {
+		ch := rune(s[i])
+		size := 1
+		if s[i] >= utf8.RuneSelf {
+			ch, size = utf8.DecodeRuneInString(s[i:])
 		}
-		linkLength += float64(normalizedTextCharacterCount(linkNode)) * coefficient
+		i += size
+		space := ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' || ch == '\f'
+		if space {
+			if c.asciiRun == 0 {
+				c.pending++
+			}
+			c.asciiRun++
+			continue
+		}
+		if ch >= utf8.RuneSelf && unicode.IsSpace(ch) {
+			c.pending++
+			c.asciiRun = 0
+			continue
+		}
+		if c.started {
+			c.length += c.pending
+		}
+		c.pending, c.asciiRun = 0, 0
+		c.length++
+		if ch > 0xffff {
+			c.length++
+		}
+		c.started = true
 	}
-
-	return linkLength / float64(textLength)
 }
 
 // normalizedTextCharacterCount computes the UTF-16 length used by
 // getLinkDensity without materializing textContent (which can otherwise make
 // nested candidates use quadratic amounts of temporary memory).
 func normalizedTextCharacterCount(element *html.Node) int {
-	length, pending, asciiRun := 0, 0, 0
-	started := false
+	var counter normalizedTextCounter
 	walkNodes(element, func(n *html.Node) bool {
-		if n.Type != html.TextNode {
-			return false
-		}
-		s := n.Data
-		for i := 0; i < len(s); {
-			// Article text is overwhelmingly ASCII. Avoid range's UTF-8 decoder
-			// and unicode.IsSpace's table lookup on that common path.
-			c := rune(s[i])
-			size := 1
-			if s[i] >= utf8.RuneSelf {
-				c, size = utf8.DecodeRuneInString(s[i:])
-			}
-			i += size
-			space := c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f'
-			if space {
-				if asciiRun == 0 {
-					pending++
-				}
-				asciiRun++
-				continue
-			}
-			if c >= utf8.RuneSelf && unicode.IsSpace(c) {
-				pending++
-				asciiRun = 0
-				continue
-			}
-			if started {
-				length += pending
-			}
-			pending, asciiRun = 0, 0
-			length++
-			if c > 0xffff {
-				length++
-			}
-			started = true
+		if n.Type == html.TextNode {
+			counter.add(n.Data)
 		}
 		return false
 	})
-	return length
+	return counter.length
 }
 
 // Get an elements class/id weight. Uses regular expressions to tell if this
@@ -2171,25 +2224,33 @@ func (r *engine) markDataTables(root *html.Node) {
 			continue
 		}
 
-		if captions := elementsByTagName(table, "caption"); len(captions) > 0 && captions[0] != nil && len(childNodes(captions[0])) > 0 {
+		// Caption, data-oriented descendants, and nested tables used to require
+		// up to seven complete scans of every table. Gather all flags together.
+		hasCaptionContent, hasDataDescendant, hasNestedTable := false, false, false
+		walkNodes(table, func(n *html.Node) bool {
+			if n == table || n.Type != html.ElementNode {
+				return false
+			}
+			switch n.Data {
+			case "caption":
+				hasCaptionContent = hasCaptionContent || n.FirstChild != nil
+			case "col", "colgroup", "tfoot", "thead", "th":
+				hasDataDescendant = true
+			case "table":
+				hasNestedTable = true
+			}
+			return false
+		})
+		if hasCaptionContent {
 			r.data(table).isDataTable = true
 		}
-
-		// If the table has a descendant with any of these tags, consider a data table:
-		var dataTableDescendants = []string{"col", "colgroup", "tfoot", "thead", "th"}
-		var descendantExists = func(tag string) bool {
-			elements := elementsByTagName(table, tag)
-			return len(elements) != 0 && elements[0] != nil
-		}
-
-		if slices.ContainsFunc(dataTableDescendants, descendantExists) {
+		if hasDataDescendant {
 			r.logDebug("Data table because found data-y descendant")
 			r.data(table).isDataTable = true
 			continue
 		}
-
 		// Nested tables indicate a layout table:
-		if tables := elementsByTagName(table, "table"); len(tables) > 0 && tables[0] != nil {
+		if hasNestedTable {
 			r.data(table).isDataTable = false
 		}
 
@@ -2278,6 +2339,86 @@ func (r *engine) fixLazyImages(root *html.Node) {
 	}
 }
 
+type conditionalStats struct {
+	paragraphs, images, listItems, inputs int
+	embeds, commas, textLength            int
+	headingTextLength, listTextLength     int
+	hasAllowedVideo                       bool
+}
+
+// gatherConditionalStats collects all of cleanConditionally's per-tag metrics
+// in one traversal. Heading and list counters are kept on small inline stacks,
+// avoiding both descendant slices and a separate text walk for every element.
+func (r *engine) gatherConditionalStats(root *html.Node) conditionalStats {
+	var stats conditionalStats
+	var allText normalizedTextCounter
+	var headingStorage [8]normalizedTextCounter
+	var listStorage [16]normalizedTextCounter
+	headings := headingStorage[:0]
+	lists := listStorage[:0]
+	var visit func(*html.Node)
+	visit = func(n *html.Node) {
+		isHeading, isList := false, false
+		if n != root && n.Type == html.ElementNode {
+			switch n.Data {
+			case "p":
+				stats.paragraphs++
+			case "img":
+				stats.images++
+			case "li":
+				stats.listItems++
+			case "input":
+				stats.inputs++
+			case "h1", "h2", "h3", "h4", "h5", "h6":
+				headings = append(headings, normalizedTextCounter{})
+				isHeading = true
+			case "ul", "ol":
+				lists = append(lists, normalizedTextCounter{})
+				isList = true
+			case "object", "embed", "iframe":
+				stats.embeds++
+				if r.options.allowedVideoRegex != nil {
+					for _, attr := range n.Attr {
+						if r.options.allowedVideoRegex.MatchString(attr.Val) {
+							stats.hasAllowedVideo = true
+							break
+						}
+					}
+					if !stats.hasAllowedVideo && n.Data == "object" && r.options.allowedVideoRegex.MatchString(innerHTML(n)) {
+						stats.hasAllowedVideo = true
+					}
+				}
+			}
+		}
+		if n.Type == html.TextNode {
+			allText.add(n.Data)
+			stats.commas += strings.Count(n.Data, ",")
+			for i := range headings {
+				headings[i].add(n.Data)
+			}
+			for i := range lists {
+				lists[i].add(n.Data)
+			}
+		}
+		for child := n.FirstChild; child != nil; child = child.NextSibling {
+			visit(child)
+		}
+		if isHeading {
+			last := len(headings) - 1
+			stats.headingTextLength += headings[last].length
+			headings = headings[:last]
+		}
+		if isList {
+			last := len(lists) - 1
+			stats.listTextLength += lists[last].length
+			lists = lists[:last]
+		}
+	}
+	visit(root)
+	stats.textLength = allText.length
+	return stats
+}
+
 // Clean an element of all tags of type "tag" if they look fishy.
 // "Fishy" is an algorithm based on content length, classnames, link density, number of images & embeds, etc.
 func (r *engine) cleanConditionally(e *html.Node, tag string) {
@@ -2292,10 +2433,10 @@ func (r *engine) cleanConditionally(e *html.Node, tag string) {
 	// TODO: Consider taking into account original contentScore here.
 
 	r.removeNodes(r.getAllNodesWithTag(e, tag), func(n *html.Node) bool {
-		// Candidate subtrees overlap heavily. Build this normalized text and its
-		// character count once and reuse them for all metrics below.
-		nodeText := r.getInnerText(n, true)
-		nodeTextLength := characterCount(nodeText)
+		// Candidate subtrees overlap heavily. Gather text length, punctuation,
+		// descendant counts, heading/list text, and embeds in one pass.
+		stats := r.gatherConditionalStats(n)
+		nodeTextLength := stats.textLength
 
 		// First check if this node IS data table, in which case don't remove it.
 		var isDataTable = func(t *html.Node) bool {
@@ -2304,12 +2445,7 @@ func (r *engine) cleanConditionally(e *html.Node, tag string) {
 
 		var isList = (tag == "ul" || tag == "ol")
 		if !isList {
-			var listLength = 0
-			var listNodes = r.getAllNodesWithTag(n, "ul", "ol")
-			for _, list := range listNodes {
-				listLength += characterCount(r.getInnerText(list, true))
-			}
-			isList = float64(listLength)/float64(nodeTextLength) > 0.9
+			isList = float64(stats.listTextLength)/float64(nodeTextLength) > 0.9
 		}
 
 		if tag == "table" && isDataTable(n) {
@@ -2335,41 +2471,22 @@ func (r *engine) cleanConditionally(e *html.Node, tag string) {
 			return true
 		}
 
-		if strings.Count(nodeText, ",") < 10 {
+		if stats.commas < 10 {
 			// If there are not very many commas, and the number of
 			// non-paragraph elements is more than paragraphs or other
 			// ominous signs, remove the element.
-			var p = countElementsByTagName(n, "p")
-			var img = countElementsByTagName(n, "img")
-			var li = countElementsByTagName(n, "li") - 100
-			var input = countElementsByTagName(n, "input")
-			var headingLength int
-			for _, heading := range r.getAllNodesWithTag(n, "h1", "h2", "h3", "h4", "h5", "h6") {
-				headingLength += characterCount(r.getInnerText(heading, true))
-			}
+			p, img := stats.paragraphs, stats.images
+			li, input := stats.listItems-100, stats.inputs
+			headingLength := stats.headingTextLength
 			var headingDensity float64
 			if nodeTextLength != 0 {
 				headingDensity = float64(headingLength) / float64(nodeTextLength)
 			}
 
-			var embedCount = 0
-			var embeds = r.getAllNodesWithTag(n, "object", "embed", "iframe")
-
-			for i := 0; i < len(embeds); i++ {
-				// If this embed has attribute that matches video regex, don't delete it.
-				for j := 0; j < len(embeds[i].Attr); j++ {
-					if r.options.allowedVideoRegex != nil && r.options.allowedVideoRegex.MatchString(embeds[i].Attr[j].Val) {
-						return false
-					}
-				}
-
-				// For embed with <object> tag, check inner HTML as well.
-				if tagName(embeds[i]) == "object" && r.options.allowedVideoRegex != nil && r.options.allowedVideoRegex.MatchString(innerHTML(embeds[i])) {
-					return false
-				}
-
-				embedCount++
+			if stats.hasAllowedVideo {
+				return false
 			}
+			embedCount := stats.embeds
 
 			var linkDensity = r.getLinkDensity(n)
 			var contentLength = nodeTextLength
@@ -2384,15 +2501,14 @@ func (r *engine) cleanConditionally(e *html.Node, tag string) {
 
 			// Allow simple lists of images to remain in pages
 			if isList && haveToRemove {
-				for _, child := range elementChildren(n) {
-					// Don't filter in lists with li's that contain more than one child
-					if len(elementChildren(child)) > 1 {
+				for child := firstElementChild(n); child != nil; child = nextElementSibling(child) {
+					// Don't filter in lists with li's that contain more than one child.
+					if hasMultipleElementChildren(child) {
 						return haveToRemove
 					}
 				}
-				var liCount = countElementsByTagName(n, "li")
 				// Only allow the list to remain if every li contains an image
-				if img == liCount {
+				if img == stats.listItems {
 					return false
 				}
 			}
