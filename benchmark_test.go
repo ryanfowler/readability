@@ -29,6 +29,38 @@ func BenchmarkParse(b *testing.B) {
 	}
 }
 
+func BenchmarkParseRetryModes(b *testing.B) {
+	data, err := os.ReadFile("tests/readability-js/test/test-pages/medium-2/source.html")
+	if err != nil {
+		b.Fatal(err)
+	}
+	input := string(data)
+
+	defaults := DefaultOptions()
+	disabled := defaults
+	disabled.CharThreshold = 0
+	forced := defaults
+	forced.CharThreshold = 1_000_000
+	for _, benchmark := range []struct {
+		name    string
+		options *Options
+	}{
+		{name: "default", options: &defaults},
+		{name: "disabled", options: &disabled},
+		{name: "forced", options: &forced},
+	} {
+		b.Run(benchmark.name, func(b *testing.B) {
+			b.ReportAllocs()
+			b.SetBytes(int64(len(data)))
+			for i := 0; i < b.N; i++ {
+				if _, err := Parse(input, "http://fakehost/test/medium-2", benchmark.options); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 func BenchmarkParseNodeRetryModes(b *testing.B) {
 	data, err := os.ReadFile("tests/readability-js/test/test-pages/medium-2/source.html")
 	if err != nil {
