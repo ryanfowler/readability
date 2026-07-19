@@ -6,7 +6,6 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
-	"sync"
 
 	"golang.org/x/net/html"
 )
@@ -32,8 +31,12 @@ type Article struct {
 // Callers that only want to override selected settings must start with
 // DefaultOptions and then change those fields. Passing nil uses all defaults.
 type Options struct {
-	MaxElemsToParse     int
-	NbTopCandidates     int
+	MaxElemsToParse int
+	NbTopCandidates int
+	// CharThreshold is the extracted text length below which extraction is
+	// retried with progressively less aggressive heuristics. If every attempt
+	// remains below the threshold, the longest non-empty result is returned.
+	// A value of zero disables retries.
 	CharThreshold       int
 	ClassesToPreserve   []string
 	KeepClasses         bool
@@ -62,10 +65,9 @@ func DefaultReaderableOptions() ReaderableOptions {
 }
 
 var (
-	ErrNoContent        = errors.New("readability: no content")
-	ErrNoBody           = errors.New("readability: document has no body")
-	ErrInvalidURL       = errors.New("readability: invalid URL")
-	ErrDocumentConsumed = errors.New("readability: document already parsed")
+	ErrNoContent  = errors.New("readability: no content")
+	ErrNoBody     = errors.New("readability: document has no body")
+	ErrInvalidURL = errors.New("readability: invalid URL")
 )
 
 type TooManyElementsError struct{ Count, Max int }
@@ -74,15 +76,7 @@ func (e *TooManyElementsError) Error() string {
 	return fmt.Sprintf("readability: %d elements exceeds maximum %d", e.Count, e.Max)
 }
 
-// Document is a parsed document. Parse consumes it and may only be called once.
-type Document struct {
-	// root is the canonical HTML5 tree used directly by the extraction engine.
-	root     *html.Node
-	mu       sync.Mutex
-	consumed bool
-}
-
-func NewDocument(input string) (*Document, error) {
+func parseHTML(input string) (*html.Node, error) {
 	// Preserve the no-body error for complete, explicitly head-only documents;
 	// html.Parse otherwise synthesizes a body. Inspect tokens rather than source
 	// substrings so <header> and text/attributes containing "<body" do not count.
@@ -143,24 +137,30 @@ scanTags:
 			return nil, ErrNoBody
 		}
 	}
-	return &Document{root: doc}, nil
+	return doc, nil
 }
 
+// Parse extracts an article from HTML source.
 func Parse(input, pageURL string, options *Options) (*Article, error) {
-	d, err := NewDocument(input)
+	root, err := parseHTML(input)
 	if err != nil {
 		return nil, err
 	}
-	return d.Parse(pageURL, options)
+	return parseNode(root, pageURL, options, false)
 }
 
-func (d *Document) Parse(pageURL string, options *Options) (*Article, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.consumed {
-		return nil, ErrDocumentConsumed
+// ParseNode extracts an article from an already parsed HTML tree. Root may be
+// a complete document or a body-rooted tree. It is not mutated, but must
+// contain a body element and must not be mutated concurrently while ParseNode
+// is running.
+func ParseNode(root *html.Node, pageURL string, options *Options) (*Article, error) {
+	return parseNode(root, pageURL, options, true)
+}
+
+func parseNode(root *html.Node, pageURL string, options *Options, cloneInput bool) (*Article, error) {
+	if root == nil || findElement(root, "body") == nil {
+		return nil, ErrNoBody
 	}
-	d.consumed = true
 	if pageURL != "" {
 		if _, err := url.ParseRequestURI(pageURL); err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrInvalidURL, err)
@@ -173,7 +173,7 @@ func (d *Document) Parse(pageURL string, options *Options) (*Article, error) {
 	}
 	if o.MaxElemsToParse > 0 {
 		count := 0
-		walkElements(d.root, func(*html.Node) bool {
+		walkElements(root, func(*html.Node) bool {
 			count++
 			return false
 		})
@@ -181,8 +181,7 @@ func (d *Document) Parse(pageURL string, options *Options) (*Article, error) {
 			return nil, &TooManyElementsError{count, o.MaxElemsToParse}
 		}
 	}
-	prepareMathJax(d.root)
-	e, err := newEngine(d.root, pageURL, func(x *engineOptions) {
+	configure := func(x *engineOptions) {
 		x.maxElemsToParse = o.MaxElemsToParse
 		x.nbTopCandidates = o.NbTopCandidates
 		x.charThreshold = o.CharThreshold
@@ -194,7 +193,14 @@ func (d *Document) Parse(pageURL string, options *Options) (*Article, error) {
 		if o.AllowedVideoRegex != nil {
 			x.allowedVideoRegex = o.AllowedVideoRegex
 		}
-	})
+	}
+	var e *engine
+	var err error
+	if cloneInput {
+		e, err = newEngineFromReadOnlyNode(root, pageURL, configure)
+	} else {
+		e, err = newEngine(root, pageURL, configure)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrNoContent, err)
 	}
@@ -205,14 +211,24 @@ func (d *Document) Parse(pageURL string, options *Options) (*Article, error) {
 	return &Article{r.Title, r.Byline, r.Dir, r.Lang, r.HTMLContent, r.TextContent, r.Length, r.Excerpt, r.SiteName, r.PublishedTime}, nil
 }
 
+// IsProbablyReaderable reports whether HTML source is likely to contain an
+// article.
 func IsProbablyReaderable(input string, options *ReaderableOptions) bool {
-	d, err := NewDocument(input)
-	return err == nil && d.IsProbablyReaderable(options)
+	root, err := parseHTML(input)
+	return err == nil && IsProbablyReaderableNode(root, options)
 }
-func (d *Document) IsProbablyReaderable(options *ReaderableOptions) bool {
+
+// IsProbablyReaderableNode reports whether an already parsed HTML tree is
+// likely to contain an article. Root may be a complete document or a
+// body-rooted tree. It is not mutated, but must contain a body element and must
+// not be mutated concurrently while this function is running.
+func IsProbablyReaderableNode(root *html.Node, options *ReaderableOptions) bool {
+	if root == nil || findElement(root, "body") == nil {
+		return false
+	}
 	o := DefaultReaderableOptions()
 	if options != nil {
 		o = *options
 	}
-	return isProbablyReaderable(d.root, func(x *engineOptions) { x.minScore = o.MinScore; x.minContentLength = o.MinContentLength })
+	return isProbablyReaderable(root, func(x *engineOptions) { x.minScore = o.MinScore; x.minContentLength = o.MinContentLength })
 }
