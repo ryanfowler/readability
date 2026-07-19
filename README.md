@@ -33,6 +33,8 @@ opts.CharThreshold = 100
 article, err := readability.Parse(source, pageURL, &opts)
 ```
 
+Set `Options.Logger` to a `*slog.Logger` to receive extraction logs. Logging is disabled when it is nil; the package does not use slog's global default logger.
+
 Passing `nil` selects all defaults. Do not use a partially populated literal such as `&readability.Options{CharThreshold: 100}` unless the other zero-valued settings are intentional.
 
 `CharThreshold` controls extraction retries. When an attempt produces less text than the threshold, extraction runs again with progressively less aggressive candidate removal, class weighting, and conditional cleanup. If no attempt reaches the threshold, the longest non-empty result is returned. Set `CharThreshold` to zero to disable retries.
