@@ -13,11 +13,13 @@ import (
 
 // Article is the extracted article and metadata. Content is unsanitized HTML.
 type Article struct {
-	Title       string `json:"title"`
-	Byline      string `json:"byline"`
-	Dir         string `json:"dir"`
-	Lang        string `json:"lang"`
-	Content     string `json:"content"`
+	Title   string `json:"title"`
+	Byline  string `json:"byline"`
+	Dir     string `json:"dir"`
+	Lang    string `json:"lang"`
+	Content string `json:"content"`
+	// TextContent is plain text with whitespace collapsed to single spaces,
+	// except inside preformatted elements.
 	TextContent string `json:"textContent"`
 	// Length is the length of TextContent in UTF-16 code units.
 	Length        int    `json:"length"`

@@ -20,6 +20,58 @@ func TestParseFragment(t *testing.T) {
 	}
 }
 
+func TestParseNormalizesTextContent(t *testing.T) {
+	article, err := Parse("<html><body><article><p>  First\n\t paragraph.  </p>\n<p>Second\u00a0 paragraph. 😀 </p></article></body></html>", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "First paragraph. Second paragraph. 😀"
+	if article.TextContent != want {
+		t.Fatalf("TextContent = %q, want %q", article.TextContent, want)
+	}
+	if article.Length != characterCount(want) {
+		t.Fatalf("Length = %d, want %d", article.Length, characterCount(want))
+	}
+}
+
+func TestParsePreservesPreformattedTextContent(t *testing.T) {
+	const input = `<html><body><article>
+<p>Code sample:</p>
+<pre>first line
+    indented line
+	Tabbed line</pre>
+<p>After sample.</p>
+</article></body></html>`
+	article, err := Parse(input, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "Code sample: first line\n    indented line\n\tTabbed line After sample."
+	if article.TextContent != want {
+		t.Fatalf("TextContent = %q, want %q", article.TextContent, want)
+	}
+	if article.Length != characterCount(want) {
+		t.Fatalf("Length = %d, want %d", article.Length, characterCount(want))
+	}
+}
+
+func TestParseAvoidsRedundantWhitespaceAroundPreformattedText(t *testing.T) {
+	const input = `<html><body><article><p>Before</p>
+<pre>
+
+  code
+</pre>
+<p>After</p></article></body></html>`
+	article, err := Parse(input, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "Before\n  code\nAfter"
+	if article.TextContent != want {
+		t.Fatalf("TextContent = %q, want %q", article.TextContent, want)
+	}
+}
+
 func TestParseNoContentErrorContract(t *testing.T) {
 	_, err := Parse(`<html><body></body></html>`, "https://example.com/", nil)
 	if !errors.Is(err, ErrNoContent) {

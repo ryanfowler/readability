@@ -938,14 +938,20 @@ func (r *engine) textSimilarity(textA, textB string) float64 {
 	if len(tokensA) == 0 || len(tokensB) == 0 {
 		return 0
 	}
-	var uniqTokensB []string
+	uniqueLength, uniqueCount := 0, 0
+	totalLength := len(tokensB) - 1 // spaces inserted between split tokens
 	for _, t := range tokensB {
+		tokenLength := characterCount(t)
+		totalLength += tokenLength
 		if !slices.Contains(tokensA, t) && t != "" {
-			uniqTokensB = append(uniqTokensB, t)
+			uniqueLength += tokenLength
+			uniqueCount++
 		}
 	}
-	var distanceB = float64(characterCount(strings.Join(uniqTokensB, " "))) / float64(characterCount(strings.Join(tokensB, " ")))
-	return 1 - distanceB
+	if uniqueCount > 1 {
+		uniqueLength += uniqueCount - 1
+	}
+	return 1 - float64(uniqueLength)/float64(totalLength)
 }
 
 func (r *engine) checkByline(n *html.Node, class, id string) bool {
@@ -2690,10 +2696,15 @@ func (r *engine) Parse() (*engineResult, error) {
 	htmlContent := r.options.serializer(articleContent)
 
 	var extractedText string
+	var extractedLength int
 	if r.options.html2text != nil {
 		extractedText = r.options.html2text(htmlContent)
+		extractedLength = characterCount(extractedText)
 	} else {
-		extractedText = textContent(articleContent)
+		// Collapse ordinary source formatting whitespace while walking the DOM,
+		// without changing whitespace-sensitive elements such as pre and textarea.
+		// This avoids retaining a potentially much larger raw textContent allocation.
+		extractedText, extractedLength = normalizedTextContent(articleContent)
 	}
 
 	return &engineResult{
@@ -2703,7 +2714,7 @@ func (r *engine) Parse() (*engineResult, error) {
 		Lang:          r.articleLang,
 		HTMLContent:   htmlContent,
 		TextContent:   extractedText,
-		Length:        characterCount(extractedText),
+		Length:        extractedLength,
 		Excerpt:       metadata.excerpt,
 		SiteName:      anyOf(metadata.siteName, r.articleSiteName),
 		PublishedTime: metadata.publishedTime,

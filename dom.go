@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"golang.org/x/net/html"
 	"golang.org/x/net/html/atom"
@@ -414,6 +415,133 @@ func textContent(n *html.Node) string {
 	write(n)
 	return b.String()
 }
+
+// normalizedTextContent returns a compact plain-text representation of a
+// subtree. All Unicode whitespace runs are collapsed to one ASCII space and
+// leading and trailing whitespace is removed.
+func normalizedTextContent(n *html.Node) (string, int) {
+	if n == nil {
+		return "", 0
+	}
+
+	// First obtain the exact compact size. A final article can contain hundreds
+	// of kilobytes of indentation, so geometric Builder growth would otherwise
+	// retain substantially more memory than the returned text needs.
+	var measure normalizedTextWriter
+	writeNormalizedNodeText(n, &measure, false)
+	if measure.bytes == 0 {
+		return "", 0
+	}
+
+	var b strings.Builder
+	b.Grow(measure.bytes)
+	write := normalizedTextWriter{out: &b}
+	writeNormalizedNodeText(n, &write, false)
+	return b.String(), measure.utf16
+}
+
+// writeNormalizedNodeText normalizes ordinary document whitespace while
+// retaining whitespace inside elements whose plain-text formatting is
+// significant.
+func writeNormalizedNodeText(n *html.Node, w *normalizedTextWriter, verbatim bool) {
+	if n.Type == html.ElementNode && (n.Data == "pre" || n.Data == "textarea") {
+		verbatim = true
+	}
+	if n.Type == html.TextNode {
+		if verbatim {
+			w.addVerbatim(n.Data)
+		} else {
+			w.add(n.Data)
+		}
+	}
+	for child := n.FirstChild; child != nil; child = child.NextSibling {
+		writeNormalizedNodeText(child, w, verbatim)
+	}
+}
+
+type normalizedTextWriter struct {
+	out                                            *strings.Builder
+	bytes, utf16                                   int
+	started, pendingWhitespace, trailingWhitespace bool
+}
+
+func (w *normalizedTextWriter) add(s string) {
+	for i := 0; i < len(s); {
+		// Consume printable ASCII in batches. This avoids rune decoding and
+		// Unicode table lookups for almost all article text.
+		if s[i] > ' ' && s[i] < utf8.RuneSelf {
+			start := i
+			for i < len(s) && s[i] > ' ' && s[i] < utf8.RuneSelf {
+				i++
+			}
+			w.flushSpace()
+			w.bytes += i - start
+			w.utf16 += i - start
+			if w.out != nil {
+				w.out.WriteString(s[start:i])
+			}
+			w.started = true
+			w.trailingWhitespace = false
+			continue
+		}
+
+		ch, size := utf8.DecodeRuneInString(s[i:])
+		i += size
+		if unicode.IsSpace(ch) {
+			if w.started && !w.trailingWhitespace {
+				w.pendingWhitespace = true
+			}
+			continue
+		}
+		w.flushSpace()
+		w.bytes += size
+		w.utf16++
+		if ch > 0xffff {
+			w.utf16++
+		}
+		if w.out != nil {
+			w.out.WriteString(s[i-size : i])
+		}
+		w.started = true
+		w.trailingWhitespace = false
+	}
+}
+
+func (w *normalizedTextWriter) addVerbatim(s string) {
+	if s == "" {
+		return
+	}
+	first, _ := utf8.DecodeRuneInString(s)
+	if unicode.IsSpace(first) {
+		// The verbatim whitespace itself separates the surrounding text.
+		w.pendingWhitespace = false
+	} else {
+		w.flushSpace()
+	}
+	w.bytes += len(s)
+	w.utf16 += characterCount(s)
+	if w.out != nil {
+		w.out.WriteString(s)
+	}
+	last, _ := utf8.DecodeLastRuneInString(s)
+	w.started = true
+	w.trailingWhitespace = unicode.IsSpace(last)
+}
+
+func (w *normalizedTextWriter) flushSpace() {
+	if !w.pendingWhitespace || w.trailingWhitespace {
+		w.pendingWhitespace = false
+		return
+	}
+	w.bytes++
+	w.utf16++
+	if w.out != nil {
+		w.out.WriteByte(' ')
+	}
+	w.pendingWhitespace = false
+	w.trailingWhitespace = true
+}
+
 func innerHTML(n *html.Node) string {
 	// Unlike bytes.Buffer.String, Builder.String does not copy the rendered
 	// document. Article HTML is one of the largest live values returned by the
