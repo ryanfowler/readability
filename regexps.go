@@ -10,9 +10,23 @@ var (
 		"-ad-", "ai2html", "banner", "breadcrumbs", "combx", "comment", "community", "cover-wrap", "disqus", "extra", "footer", "gdpr", "header", "legends", "menu", "related", "remark", "replies", "rss", "shoutbox", "sidebar", "skyscraper", "social", "sponsor", "supplemental", "ad-break", "agegate", "pagination", "pager", "popup", "yom-remote",
 	}
 	maybeCandidateParts = []string{"and", "article", "body", "column", "content", "main", "shadow"}
+	bylineParts         = []string{"byline", "author", "dateline", "writtenby", "p-author"}
+	positiveParts       = []string{
+		"article", "body", "content", "entry", "hentry", "h-entry", "main",
+		"page", "pagination", "post", "text", "blog", "story",
+	}
+	negativeParts = []string{
+		"-ad-", "hidden", "banner", "combx", "comment", "com-", "contact",
+		"foot", "footer", "footnote", "gdpr", "masthead", "media", "meta",
+		"outbrain", "promo", "related", "scroll", "share", "shoutbox", "sidebar",
+		"skyscraper", "sponsor", "shopping", "tags", "tool", "widget",
+	}
 )
 
 func containsAnyFold(s string, parts []string) bool {
+	if s == "" {
+		return false
+	}
 	// DOM class and id values are overwhelmingly ASCII. Avoid regexp's
 	// backtracking alternation while retaining its case-insensitive behavior.
 	s = strings.ToLower(s)
@@ -27,25 +41,90 @@ func containsAnyFold(s string, parts []string) bool {
 func matchesUnlikelyCandidate(s string) bool { return containsAnyFold(s, unlikelyCandidateParts) }
 func matchesMaybeCandidate(s string) bool    { return containsAnyFold(s, maybeCandidateParts) }
 
+func containsFoldLiteral(s, part string) bool {
+	for i := 0; i+len(part) <= len(s); i++ {
+		if strings.EqualFold(s[i:i+len(part)], part) {
+			return true
+		}
+	}
+	return false
+}
+
+func matchesByline(s string) bool {
+	if s == "" {
+		return false
+	}
+	// This check runs for nearly every element during extraction. Its patterns
+	// are fixed ASCII literals, so avoid both regexp backtracking and allocating
+	// a lower-cased copy of each class/id value.
+	for _, part := range bylineParts {
+		if containsFoldLiteral(s, part) {
+			return true
+		}
+	}
+	return false
+}
+
+func matchesShareElement(s string) bool {
+	if s == "" {
+		return false
+	}
+	// Equivalent to (?i)(\b|_)(share|sharedaddy)(\b|_). Go regexp's word
+	// boundaries are ASCII-only; an underscore is explicitly also a boundary.
+	for _, part := range [...]string{"sharedaddy", "share"} {
+		for i := 0; i+len(part) <= len(s); i++ {
+			if i > 0 && isASCIIAlphaNumeric(s[i-1]) ||
+				i+len(part) < len(s) && isASCIIAlphaNumeric(s[i+len(part)]) {
+				continue
+			}
+			if strings.EqualFold(s[i:i+len(part)], part) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isASCIIAlphaNumeric(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
+}
+
+func matchesPositive(s string) bool {
+	for _, part := range positiveParts {
+		if containsFoldLiteral(s, part) {
+			return true
+		}
+	}
+	return false
+}
+
+func matchesNegative(s string) bool {
+	for _, part := range negativeParts {
+		if containsFoldLiteral(s, part) {
+			return true
+		}
+	}
+	// The original regexp treats "hid" as negative only when it is the whole
+	// value or a space-delimited token.
+	return strings.EqualFold(s, "hid") ||
+		len(s) >= 4 && (strings.EqualFold(s[:4], "hid ") || strings.EqualFold(s[len(s)-4:], " hid")) ||
+		containsFoldLiteral(s, " hid ")
+}
+
 // All of the regular expressions in use within readability.
 // Defined up here so we don't instantiate them repeatedly in loops.
 var (
 	cssImportant = regexp.MustCompile(`(?i)\s*!\s*important\s*$`)
 
-	positive = regexp.MustCompile(`(?i)article|body|content|entry|hentry|h-entry|main|page|pagination|post|text|blog|story`)
-	negative = regexp.MustCompile(`(?i)-ad-|hidden|^hid$| hid$| hid |^hid |banner|combx|comment|com-|contact|foot|footer|footnote|gdpr|masthead|media|meta|outbrain|promo|related|scroll|share|shoutbox|sidebar|skyscraper|sponsor|shopping|tags|tool|widget`)
 	//extraneous           = regexp.MustCompile(`(?i)print|archive|comment|discuss|e[\-]?mail|share|reply|all|login|sign|single|utility`)
-	byline = regexp.MustCompile(`(?i)byline|author|dateline|writtenby|p-author`)
 	//replaceFonts         = regexp.MustCompile(`(?i)<(\/?)font[^>]*>`)
-	normalize     = regexp.MustCompile(`\s{2,}`)
-	videos        = regexp.MustCompile(`(?i)\/\/(www\.)?((dailymotion|youtube|youtube-nocookie|player\.vimeo|v\.qq)\.com|(archive|upload\.wikimedia)\.org|player\.twitch\.tv)`)
-	shareElements = regexp.MustCompile(`(?i)(\b|_)(share|sharedaddy)(\b|_)`)
+	normalize = regexp.MustCompile(`\s{2,}`)
+	videos    = regexp.MustCompile(`(?i)\/\/(www\.)?((dailymotion|youtube|youtube-nocookie|player\.vimeo|v\.qq)\.com|(archive|upload\.wikimedia)\.org|player\.twitch\.tv)`)
 	//nextLink             = regexp.MustCompile(`(?i)(next|weiter|continue|>([^\|]|$)|»([^\|]|$))`)
 	//prevLink             = regexp.MustCompile(`(prev|earl|old|new|<|«)`)
 	tokenize   = regexp.MustCompile(`\W+`)
 	whitespace = regexp.MustCompile(`^\s*$`)
 	hasContent = regexp.MustCompile(`\S$`)
-	hashUrl    = regexp.MustCompile(`^#.+`)
 	srcsetUrl  = regexp.MustCompile(`(\S+)(\s+[\d.]+[xw])?(\s*(?:,|$))`)
 	b64DataUrl = regexp.MustCompile(`(?i)^data:\s*([^\s;,]+)\s*;\s*base64\s*,`)
 	// See: https://schema.org/Article
@@ -62,7 +141,6 @@ var (
 	htmlCharCodesRgx     = regexp.MustCompile(`(?i)&#(?:x([0-9a-fA-F]{1,4})|([0-9]{1,5}));`)
 	doubleForwardSlashes = regexp.MustCompile(`//[^/]+`)
 	separators           = regexp.MustCompile(`[\|\-–—\\\/>»]+`)
-	dotSpaceOrDollar     = regexp.MustCompile(`\.( |$)`)
 	cdata                = regexp.MustCompile(`^\s*<!\[CDATA\[|\]\]>\s*$`)
 	schemaUrl            = regexp.MustCompile(`^https?\:\/\/schema\.org\/?$`)
 	// property is a space-separated list of values
