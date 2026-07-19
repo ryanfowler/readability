@@ -20,6 +20,19 @@ func TestParseFragment(t *testing.T) {
 	}
 }
 
+func TestParseIncludesContentNode(t *testing.T) {
+	article, err := Parse(`<html><body><article><p>Parsed article content.</p></article></body></html>`, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if article.Node == nil {
+		t.Fatal("Node = nil")
+	}
+	if got := innerHTML(article.Node); got != article.Content {
+		t.Fatalf("Node inner HTML = %q, want Content %q", got, article.Content)
+	}
+}
+
 func TestParseNormalizesTextContent(t *testing.T) {
 	article, err := Parse("<html><body><article><p>  First\n\t paragraph.  </p>\n<p>Second\u00a0 paragraph. 😀 </p></article></body></html>", "", nil)
 	if err != nil {
@@ -145,8 +158,14 @@ func TestParsedNodeAPIsDoNotMutateInput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second ParseNode: %v", err)
 	}
-	if *first != *second {
+	firstValue, secondValue := *first, *second
+	firstNode, secondNode := firstValue.Node, secondValue.Node
+	firstValue.Node, secondValue.Node = nil, nil
+	if firstValue != secondValue {
 		t.Fatal("repeated ParseNode calls returned different articles")
+	}
+	if firstNode == nil || secondNode == nil || innerHTML(firstNode) != innerHTML(secondNode) {
+		t.Fatal("repeated ParseNode calls returned different content nodes")
 	}
 
 	var after strings.Builder
