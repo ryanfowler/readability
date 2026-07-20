@@ -1,0 +1,9 @@
+readability (Go port)
+Copyright (c) 2025 Ryan Fowler
+
+This product includes software derived from Mozilla Readability:
+Readability
+Copyright (c) 2010 Arc90 Inc
+Copyright (c) 2010-2026 Mozilla and Contributors
+
+The Go port contains substantial modifications from the original software.

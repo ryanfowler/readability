@@ -182,10 +182,10 @@ Treat all extracted data as untrusted input.
 
 ## Compatibility
 
-This package tracks Mozilla Readability.js at commit `08be6b4bdb204dd333c9b7a0cfbc0e730b257252`. The repository pins Mozilla's official 130-case test corpus in `tests/readability-js`.
+This package tracks Mozilla Readability.js at commit `ab4027a8b37669745016869a37a504727992b2ba`. The repository pins Mozilla's official 130-case test corpus in `tests/readability-js`.
 
 Go parses and serializes the HTML instead of a browser DOM. As a result, attribute order and other HTML serialization details can differ.
 
 ## License
 
-The project is licensed under the [MIT License](LICENSE). It contains code derived from Mozilla Readability and Arc90 Readability. The pinned Mozilla test fixtures retain their original license.
+The project is licensed under the [Apache License 2.0](LICENSE); see [NOTICE](NOTICE) for Mozilla Readability and Arc90 Readability attribution. The pinned Mozilla test fixtures retain their original license.
