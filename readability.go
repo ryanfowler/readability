@@ -2289,6 +2289,7 @@ func (r *engine) markDataTables(root *html.Node) {
 		})
 		if hasCaptionContent {
 			r.data(table).isDataTable = true
+			continue
 		}
 		if hasDataDescendant {
 			r.logDebug("Data table because found data-y descendant")
@@ -2298,6 +2299,7 @@ func (r *engine) markDataTables(root *html.Node) {
 		// Nested tables indicate a layout table:
 		if hasNestedTable {
 			r.data(table).isDataTable = false
+			continue
 		}
 
 		var rows, columns = r.getRowAndColumnCount(table)
