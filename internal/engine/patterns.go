@@ -3,6 +3,7 @@ package engine
 import (
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 var (
@@ -43,7 +44,25 @@ func matchesMaybeCandidate(s string) bool    { return containsAnyFold(s, maybeCa
 
 func containsFoldLiteral(s, part string) bool {
 	for i := 0; i+len(part) <= len(s); i++ {
-		if strings.EqualFold(s[i:i+len(part)], part) {
+		match := true
+		for j := 0; j < len(part); j++ {
+			c := s[i+j]
+			if c >= utf8.RuneSelf {
+				// EqualFold includes a few non-ASCII runes in ASCII fold
+				// classes (for example, the long s). Preserve that behavior
+				// off the overwhelmingly common ASCII path.
+				match = strings.EqualFold(s[i:i+len(part)], part)
+				break
+			}
+			if c >= 'A' && c <= 'Z' {
+				c += 'a' - 'A'
+			}
+			if c != part[j] {
+				match = false
+				break
+			}
+		}
+		if match {
 			return true
 		}
 	}

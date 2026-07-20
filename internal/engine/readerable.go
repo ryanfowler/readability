@@ -58,7 +58,7 @@ func isProbablyReaderable(doc *html.Node, minScore float64, minContentLength int
 			return false
 		}
 
-		textContentLength := characterCount(strings.TrimSpace(textContent(n)))
+		textContentLength := trimmedTextCharacterCount(n)
 		if textContentLength < minContentLength {
 			return false
 		}

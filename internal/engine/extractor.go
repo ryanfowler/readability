@@ -1919,20 +1919,41 @@ func articleCommaCount(s string) int {
 
 // Remove the style attribute on every e and under.
 // TODO: Test if getElementsByTagName(*) is faster.
+func isPresentationalAttribute(name string) bool {
+	// x/net/html lower-cases names, making the switch the normal path. Keep
+	// case-insensitive behavior for trees supplied directly to ParseNode.
+	switch name {
+	case "align", "background", "bgcolor", "border", "cellpadding", "cellspacing",
+		"frame", "hspace", "rules", "style", "valign", "vspace":
+		return true
+	}
+	for _, candidate := range presentationalAttribute {
+		if attributeNameEqual(name, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *extractor) cleanStyles(e *html.Node) {
 	if e == nil || strings.ToLower(tagName(e)) == "svg" {
 		return
 	}
 
-	// Remove `style` and deprecated presentational attributes
-	for i := 0; i < len(presentationalAttribute); i++ {
-		removeAttribute(e, presentationalAttribute[i])
+	// Remove presentational attributes in one pass. Calling removeAttribute for
+	// every possible name repeatedly scanned the same slice, particularly hurting
+	// pages whose elements carry many data-* attributes.
+	removeSize := slices.Contains(deprecatedSizeAttributeElems, tagName(e))
+	attrs := e.Attr[:0]
+	for _, attr := range e.Attr {
+		if isPresentationalAttribute(attr.Key) || removeSize &&
+			(attributeNameEqual(attr.Key, "width") || attributeNameEqual(attr.Key, "height")) {
+			continue
+		}
+		attrs = append(attrs, attr)
 	}
-
-	if slices.Contains(deprecatedSizeAttributeElems, tagName(e)) {
-		removeAttribute(e, "width")
-		removeAttribute(e, "height")
-	}
+	clear(e.Attr[len(attrs):])
+	e.Attr = attrs
 
 	var cur = firstElementChild(e)
 	for cur != nil {
@@ -2309,6 +2330,7 @@ type conditionalStats struct {
 	paragraphs, images, listItems, inputs int
 	embeds, commas, textLength            int
 	headingTextLength, listTextLength     int
+	linkTextLength                        float64
 	hasAllowedVideo                       bool
 }
 
@@ -2320,11 +2342,13 @@ func (r *extractor) gatherConditionalStats(root *html.Node) conditionalStats {
 	var allText normalizedTextCounter
 	var headingStorage [8]normalizedTextCounter
 	var listStorage [16]normalizedTextCounter
+	var linkStorage [4]linkTextCounter
 	headings := headingStorage[:0]
 	lists := listStorage[:0]
+	links := linkStorage[:0]
 	var visit func(*html.Node)
 	visit = func(n *html.Node) {
-		isHeading, isList := false, false
+		isHeading, isList, isLink := false, false, false
 		if n != root && n.Type == html.ElementNode {
 			switch n.Data {
 			case "p":
@@ -2341,6 +2365,13 @@ func (r *extractor) gatherConditionalStats(root *html.Node) conditionalStats {
 			case "ul", "ol":
 				lists = append(lists, normalizedTextCounter{})
 				isList = true
+			case "a":
+				coefficient := 1.0
+				if href := getAttribute(n, "href"); len(href) > 1 && href[0] == '#' {
+					coefficient = 0.3
+				}
+				links = append(links, linkTextCounter{coefficient: coefficient})
+				isLink = true
 			case "object", "embed", "iframe":
 				stats.embeds++
 				if r.options.allowedVideoRegex != nil {
@@ -2365,9 +2396,17 @@ func (r *extractor) gatherConditionalStats(root *html.Node) conditionalStats {
 			for i := range lists {
 				lists[i].add(n.Data)
 			}
+			for i := range links {
+				links[i].text.add(n.Data)
+			}
 		}
 		for child := n.FirstChild; child != nil; child = child.NextSibling {
 			visit(child)
+		}
+		if isLink {
+			last := len(links) - 1
+			stats.linkTextLength += float64(links[last].text.length) * links[last].coefficient
+			links = links[:last]
 		}
 		if isHeading {
 			last := len(headings) - 1
@@ -2454,7 +2493,10 @@ func (r *extractor) cleanConditionally(e *html.Node, tag string) {
 			}
 			embedCount := stats.embeds
 
-			var linkDensity = r.getLinkDensity(n)
+			var linkDensity float64
+			if nodeTextLength != 0 {
+				linkDensity = stats.linkTextLength / float64(nodeTextLength)
+			}
 			var contentLength = nodeTextLength
 
 			var haveToRemove = (img > 1 && float64(p)/float64(img) < 0.5 && !hasAncestorTagWithFilter(n, "figure", 3, nil)) ||
