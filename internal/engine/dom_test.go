@@ -3,6 +3,8 @@ package engine
 import (
 	"strings"
 	"testing"
+
+	"golang.org/x/net/html"
 )
 
 func TestParseDecodesHTMLEntitiesInMetadata(t *testing.T) {
@@ -31,6 +33,36 @@ func TestParseDecodesHTMLEntitiesInMetadata(t *testing.T) {
 	}
 	if article.SiteName != "Example ®" {
 		t.Errorf("SiteName = %q, want %q", article.SiteName, "Example ®")
+	}
+}
+
+func TestUnicodeFoldedAttributeNames(t *testing.T) {
+	node := newElement("img")
+	node.Attr = []html.Attribute{{Key: "ſrc", Val: "old"}}
+
+	if got := getAttribute(node, "src"); got != "old" {
+		t.Fatalf("getAttribute(src) = %q, want old", got)
+	}
+	if !hasAttribute(node, "src") {
+		t.Fatal("hasAttribute(src) = false, want true")
+	}
+	setAttribute(node, "src", "new")
+	if len(node.Attr) != 1 || node.Attr[0].Key != "ſrc" || node.Attr[0].Val != "new" {
+		t.Fatalf("setAttribute(src) produced attributes %#v", node.Attr)
+	}
+	removeAttribute(node, "src")
+	if len(node.Attr) != 0 {
+		t.Fatalf("removeAttribute(src) left attributes %#v", node.Attr)
+	}
+}
+
+func TestCleanStylesUnicodeFoldedAttributeName(t *testing.T) {
+	node := newElement("div")
+	node.Attr = []html.Attribute{{Key: "ſtyle", Val: "display:none"}, {Key: "data-value", Val: "kept"}}
+
+	(&extractor{}).cleanStyles(node)
+	if len(node.Attr) != 1 || node.Attr[0].Key != "data-value" {
+		t.Fatalf("cleanStyles left attributes %#v", node.Attr)
 	}
 }
 

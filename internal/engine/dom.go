@@ -132,10 +132,52 @@ func replaceChild(p, n, o *html.Node) *html.Node {
 	p.RemoveChild(o)
 	return o
 }
+
+// attributeNameEqual has an ASCII fast path for HTML attribute names. Attribute
+// lookup is linear and misses are common, so calling strings.EqualFold for
+// every attribute was surprisingly expensive on attribute-heavy documents.
+func attributeNameEqual(a, b string) bool {
+	if len(a) != len(b) {
+		// Unicode simple-fold equivalents may have different UTF-8 lengths
+		// (for example, ſ and s). Parsed HTML names are ASCII in practice, so
+		// scan for a non-ASCII byte before taking the slower Unicode path.
+		for i := 0; i < len(a); i++ {
+			if a[i] >= utf8.RuneSelf {
+				return strings.EqualFold(a, b)
+			}
+		}
+		for i := 0; i < len(b); i++ {
+			if b[i] >= utf8.RuneSelf {
+				return strings.EqualFold(a, b)
+			}
+		}
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		x, y := a[i], b[i]
+		if x == y {
+			continue
+		}
+		if x >= utf8.RuneSelf || y >= utf8.RuneSelf {
+			return strings.EqualFold(a, b)
+		}
+		if x >= 'A' && x <= 'Z' {
+			x += 'a' - 'A'
+		}
+		if y >= 'A' && y <= 'Z' {
+			y += 'a' - 'A'
+		}
+		if x != y {
+			return false
+		}
+	}
+	return true
+}
+
 func getAttribute(n *html.Node, name string) string {
 	if n != nil {
 		for _, a := range n.Attr {
-			if a.Key == name || strings.EqualFold(a.Key, name) {
+			if attributeNameEqual(a.Key, name) {
 				return a.Val
 			}
 		}
@@ -145,7 +187,7 @@ func getAttribute(n *html.Node, name string) string {
 func hasAttribute(n *html.Node, name string) bool {
 	if n != nil {
 		for _, a := range n.Attr {
-			if a.Key == name || strings.EqualFold(a.Key, name) {
+			if attributeNameEqual(a.Key, name) {
 				return true
 			}
 		}
@@ -157,7 +199,7 @@ func setAttribute(n *html.Node, name, value string) {
 		return
 	}
 	for i := range n.Attr {
-		if n.Attr[i].Key == name || strings.EqualFold(n.Attr[i].Key, name) {
+		if attributeNameEqual(n.Attr[i].Key, name) {
 			n.Attr[i].Val = value
 			return
 		}
@@ -169,8 +211,10 @@ func removeAttribute(n *html.Node, name string) {
 		return
 	}
 	for i := 0; i < len(n.Attr); i++ {
-		if n.Attr[i].Key == name || strings.EqualFold(n.Attr[i].Key, name) {
-			n.Attr = append(n.Attr[:i], n.Attr[i+1:]...)
+		if attributeNameEqual(n.Attr[i].Key, name) {
+			copy(n.Attr[i:], n.Attr[i+1:])
+			n.Attr[len(n.Attr)-1] = html.Attribute{}
+			n.Attr = n.Attr[:len(n.Attr)-1]
 			return
 		}
 	}
@@ -367,6 +411,43 @@ func nodeName(n *html.Node) string {
 	}
 	return tagName(n)
 }
+
+// trimmedTextCharacterCount counts UTF-16 units after trimming Unicode
+// whitespace from the concatenated descendant text, without materializing it.
+// It is used by the readerability heuristic, which often examines several
+// overlapping candidate subtrees.
+func trimmedTextCharacterCount(n *html.Node) int {
+	count, pending := 0, 0
+	started := false
+	var visit func(*html.Node)
+	visit = func(node *html.Node) {
+		if node.Type == html.TextNode {
+			for _, r := range node.Data {
+				units := 1
+				if r > 0xffff {
+					units = 2
+				}
+				if unicode.IsSpace(r) {
+					if started {
+						pending += units
+					}
+				} else {
+					count += pending + units
+					pending = 0
+					started = true
+				}
+			}
+		}
+		for child := node.FirstChild; child != nil; child = child.NextSibling {
+			visit(child)
+		}
+	}
+	if n != nil {
+		visit(n)
+	}
+	return count
+}
+
 func textContent(n *html.Node) string {
 	if n == nil {
 		return ""
