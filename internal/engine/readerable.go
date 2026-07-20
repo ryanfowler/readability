@@ -19,7 +19,7 @@
  * available at: http://code.google.com/p/arc90labs-readability
  */
 
-package readability
+package engine
 
 import (
 	"math"

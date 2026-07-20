@@ -1,4 +1,4 @@
-package readability
+package engine
 
 import (
 	"os"
@@ -12,7 +12,7 @@ import (
 func BenchmarkParse(b *testing.B) {
 	cases := []string{"basic-tags-cleaning", "replace-brs", "medium-2", "ars-1", "heise", "nytimes-5", "wikipedia-2", "yahoo-2", "buzzfeed-1", "engadget", "guardian-1"}
 	for _, name := range cases {
-		data, err := os.ReadFile(filepath.Join("tests/readability-js/test/test-pages", name, "source.html"))
+		data, err := os.ReadFile(filepath.Join("../../tests/readability-js/test/test-pages", name, "source.html"))
 		if err != nil {
 			b.Fatalf("fixtures unavailable: %v", err)
 		}
@@ -30,7 +30,7 @@ func BenchmarkParse(b *testing.B) {
 }
 
 func BenchmarkParseRetryModes(b *testing.B) {
-	data, err := os.ReadFile("tests/readability-js/test/test-pages/medium-2/source.html")
+	data, err := os.ReadFile("../../tests/readability-js/test/test-pages/medium-2/source.html")
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func BenchmarkParseRetryModes(b *testing.B) {
 }
 
 func BenchmarkParseNodeRetryModes(b *testing.B) {
-	data, err := os.ReadFile("tests/readability-js/test/test-pages/medium-2/source.html")
+	data, err := os.ReadFile("../../tests/readability-js/test/test-pages/medium-2/source.html")
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func BenchmarkParseNodeRetryModes(b *testing.B) {
 }
 
 func BenchmarkIsProbablyReaderable(b *testing.B) {
-	data, err := os.ReadFile("tests/readability-js/test/test-pages/nytimes-5/source.html")
+	data, err := os.ReadFile("../../tests/readability-js/test/test-pages/nytimes-5/source.html")
 	if err != nil {
 		b.Fatal(err)
 	}
