@@ -1,4 +1,4 @@
-package readability
+package engine
 
 import (
 	"bytes"

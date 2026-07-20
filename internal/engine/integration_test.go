@@ -1,4 +1,4 @@
-package readability
+package engine
 
 import (
 	"encoding/json"
@@ -76,7 +76,7 @@ func readFile(t *testing.T, p string) string {
 	return string(b)
 }
 func TestMozillaCorpus(t *testing.T) {
-	root := "tests/readability-js/test/test-pages"
+	root := "../../tests/readability-js/test/test-pages"
 	sources, e := filepath.Glob(filepath.Join(root, "*", "source.html"))
 	if e != nil {
 		t.Fatal(e)
