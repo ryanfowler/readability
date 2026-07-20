@@ -135,7 +135,7 @@ func replaceChild(p, n, o *html.Node) *html.Node {
 func getAttribute(n *html.Node, name string) string {
 	if n != nil {
 		for _, a := range n.Attr {
-			if strings.EqualFold(a.Key, name) {
+			if a.Key == name || strings.EqualFold(a.Key, name) {
 				return a.Val
 			}
 		}
@@ -145,7 +145,7 @@ func getAttribute(n *html.Node, name string) string {
 func hasAttribute(n *html.Node, name string) bool {
 	if n != nil {
 		for _, a := range n.Attr {
-			if strings.EqualFold(a.Key, name) {
+			if a.Key == name || strings.EqualFold(a.Key, name) {
 				return true
 			}
 		}
@@ -157,7 +157,7 @@ func setAttribute(n *html.Node, name, value string) {
 		return
 	}
 	for i := range n.Attr {
-		if strings.EqualFold(n.Attr[i].Key, name) {
+		if n.Attr[i].Key == name || strings.EqualFold(n.Attr[i].Key, name) {
 			n.Attr[i].Val = value
 			return
 		}
@@ -169,7 +169,7 @@ func removeAttribute(n *html.Node, name string) {
 		return
 	}
 	for i := 0; i < len(n.Attr); i++ {
-		if strings.EqualFold(n.Attr[i].Key, name) {
+		if n.Attr[i].Key == name || strings.EqualFold(n.Attr[i].Key, name) {
 			n.Attr = append(n.Attr[:i], n.Attr[i+1:]...)
 			return
 		}
@@ -337,8 +337,27 @@ func tagName(n *html.Node) string {
 	case "video":
 		return "VIDEO"
 	}
+	if upper, ok := lessCommonUpperTagNames[n.Data]; ok {
+		return upper
+	}
 	return strings.ToUpper(n.Data)
 }
+
+// lessCommonUpperTagNames keeps standard tags off tagName's allocation path
+// without enlarging its hot switch, which contains the tags extraction tests on
+// almost every node visit.
+var lessCommonUpperTagNames = map[string]string{
+	"abbr": "ABBR", "address": "ADDRESS", "area": "AREA", "base": "BASE",
+	"bdi": "BDI", "bdo": "BDO", "canvas": "CANVAS", "cite": "CITE",
+	"col": "COL", "colgroup": "COLGROUP", "data": "DATA", "datalist": "DATALIST",
+	"details": "DETAILS", "dialog": "DIALOG", "fieldset": "FIELDSET", "kbd": "KBD",
+	"legend": "LEGEND", "map": "MAP", "mark": "MARK", "menu": "MENU",
+	"meter": "METER", "optgroup": "OPTGROUP", "output": "OUTPUT", "param": "PARAM",
+	"progress": "PROGRESS", "q": "Q", "rp": "RP", "rt": "RT", "ruby": "RUBY",
+	"s": "S", "samp": "SAMP", "slot": "SLOT", "summary": "SUMMARY",
+	"template": "TEMPLATE", "track": "TRACK", "u": "U", "var": "VAR", "wbr": "WBR",
+}
+
 func nodeName(n *html.Node) string {
 	if n == nil {
 		return ""
