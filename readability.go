@@ -4,9 +4,8 @@
 // golang.org/x/net/html. Use IsProbablyReaderable or
 // IsProbablyReaderableNode when you only need a fast readerability check.
 //
-// Pass nil for an options pointer to use the defaults. To change selected
-// options, call DefaultOptions or DefaultReaderableOptions first. Then change
-// the returned value.
+// Parse and the readerability functions use defaults when called without
+// options. Pass functional options to change selected settings.
 //
 // Article.Content and Article.Node can contain unsafe HTML. The package does
 // not sanitize them. Sanitize extracted HTML before you add it to a web page.
@@ -57,54 +56,103 @@ type Article struct {
 	PublishedTime string `json:"publishedTime"`
 }
 
-// Options controls article extraction.
-//
-// Pass nil to Parse or ParseNode to use the defaults. To change selected
-// fields, first call DefaultOptions and then change the returned value. A
-// non-nil Options value supplies all options. Zero values have a function. A
-// nil AllowedVideoRegex is the exception; it selects the built-in allowlist.
-type Options struct {
-	// MaxElemsToParse is the maximum number of HTML elements that extraction
-	// accepts. Zero removes the limit.
-	MaxElemsToParse int
-	// NbTopCandidates is the number of top article candidates to compare.
-	NbTopCandidates int
-	// CharThreshold is the minimum result length in UTF-16 code units. The
-	// package retries extraction if the result is shorter. Each retry uses less
-	// strict cleanup rules. If all results are too short, the package returns the
-	// longest nonempty result. Zero prevents retries.
-	CharThreshold int
-	// ClassesToPreserve lists the CSS classes to retain during class cleanup.
-	// This field has no effect when KeepClasses is true.
-	ClassesToPreserve []string
-	// KeepClasses retains all CSS classes when it is true.
-	KeepClasses bool
-	// DisableJSONLD prevents metadata extraction from JSON-LD when it is true.
-	DisableJSONLD bool
-	// AllowedVideoRegex identifies video URLs that cleanup can retain. A nil
-	// value selects the built-in allowlist.
-	AllowedVideoRegex *regexp.Regexp
-	// LinkDensityModifier changes the link-density limits that the cleanup rules
-	// use to remove a candidate.
-	LinkDensityModifier float64
-	// Logger receives extraction log records. A nil value turns logs off. The
-	// package does not use the global slog logger.
-	Logger *slog.Logger
-	// Debug enables additional verbose log records. Logger must be non-nil to
-	// receive these records.
-	Debug bool
+type options struct {
+	maxElemsToParse     int
+	nbTopCandidates     int
+	charThreshold       int
+	classesToPreserve   []string
+	keepClasses         bool
+	disableJSONLD       bool
+	allowedVideoRegex   *regexp.Regexp
+	linkDensityModifier float64
+	logger              *slog.Logger
+	debug               bool
 }
 
-// ReaderableOptions controls the fast readerability heuristic.
-//
-// Pass nil to a readerability function to use the defaults. To change selected
-// fields, first call DefaultReaderableOptions and then change the returned
-// value. A non-nil ReaderableOptions value supplies all options.
-type ReaderableOptions struct {
-	// MinScore is the score that the document must exceed.
-	MinScore float64
-	// MinContentLength is the minimum candidate length in UTF-16 code units.
-	MinContentLength int
+// Option configures article extraction. Options are applied in order, so a
+// later option overrides an earlier option for the same setting.
+type Option func(*options)
+
+// WithMaxElemsToParse sets the maximum number of HTML elements accepted during
+// extraction. Zero removes the limit.
+func WithMaxElemsToParse(max int) Option {
+	return func(o *options) { o.maxElemsToParse = max }
+}
+
+// WithNbTopCandidates sets the number of top article candidates to compare.
+func WithNbTopCandidates(count int) Option {
+	return func(o *options) { o.nbTopCandidates = count }
+}
+
+// WithCharThreshold sets the minimum result length in UTF-16 code units. The
+// package retries extraction with less strict cleanup when a result is shorter.
+// Zero prevents retries.
+func WithCharThreshold(threshold int) Option {
+	return func(o *options) { o.charThreshold = threshold }
+}
+
+// WithClassesToPreserve sets the CSS classes retained during class cleanup. It
+// has no effect when WithKeepClasses(true) is also used.
+func WithClassesToPreserve(classes ...string) Option {
+	classes = append([]string(nil), classes...)
+	return func(o *options) {
+		o.classesToPreserve = append([]string(nil), classes...)
+	}
+}
+
+// WithKeepClasses controls whether all CSS classes are retained.
+func WithKeepClasses(keep bool) Option {
+	return func(o *options) { o.keepClasses = keep }
+}
+
+// WithDisableJSONLD controls whether metadata extraction from JSON-LD is
+// disabled.
+func WithDisableJSONLD(disable bool) Option {
+	return func(o *options) { o.disableJSONLD = disable }
+}
+
+// WithAllowedVideoRegex sets the pattern used to identify video URLs that
+// cleanup can retain. A nil pattern selects the built-in allowlist.
+func WithAllowedVideoRegex(pattern *regexp.Regexp) Option {
+	return func(o *options) { o.allowedVideoRegex = pattern }
+}
+
+// WithLinkDensityModifier changes the link-density limits used by cleanup
+// rules to remove a candidate.
+func WithLinkDensityModifier(modifier float64) Option {
+	return func(o *options) { o.linkDensityModifier = modifier }
+}
+
+// WithLogger sets the logger that receives extraction records. A nil logger
+// turns logging off. The package does not use the global slog logger.
+func WithLogger(logger *slog.Logger) Option {
+	return func(o *options) { o.logger = logger }
+}
+
+// WithDebug controls additional verbose log records. A non-nil logger is
+// required to receive these records.
+func WithDebug(debug bool) Option {
+	return func(o *options) { o.debug = debug }
+}
+
+type readerableOptions struct {
+	minScore         float64
+	minContentLength int
+}
+
+// ReaderableOption configures the fast readerability heuristic. Options are
+// applied in order.
+type ReaderableOption func(*readerableOptions)
+
+// WithMinScore sets the score that a document must exceed to be considered
+// readerable.
+func WithMinScore(score float64) ReaderableOption {
+	return func(o *readerableOptions) { o.minScore = score }
+}
+
+// WithMinContentLength sets the minimum candidate length in UTF-16 code units.
+func WithMinContentLength(length int) ReaderableOption {
+	return func(o *readerableOptions) { o.minContentLength = length }
 }
 
 var (
@@ -117,7 +165,8 @@ var (
 	ErrInvalidURL = engine.ErrInvalidURL
 )
 
-// TooManyElementsError reports that a document exceeds MaxElemsToParse.
+// TooManyElementsError reports that a document exceeds the limit set by
+// WithMaxElemsToParse.
 type TooManyElementsError struct {
 	// Count is the number of elements in the document.
 	Count int
@@ -129,29 +178,18 @@ func (e *TooManyElementsError) Error() string {
 	return fmt.Sprintf("readability: %d elements exceeds maximum %d", e.Count, e.Max)
 }
 
-// DefaultOptions returns an Options value with the Mozilla defaults.
-func DefaultOptions() Options {
-	return optionsFromEngine(engine.DefaultOptions())
-}
-
-// DefaultReaderableOptions returns a ReaderableOptions value with the Mozilla
-// defaults.
-func DefaultReaderableOptions() ReaderableOptions {
-	o := engine.DefaultReaderableOptions()
-	return ReaderableOptions{MinScore: o.MinScore, MinContentLength: o.MinContentLength}
-}
-
 // Parse reads HTML from input and extracts an article.
 //
 // pageURL can be empty. If it is not empty, it must be an absolute HTTP or
 // HTTPS URL with a host. Parse uses pageURL and the document base URL to
 // resolve relative links and media URLs.
 //
-// Pass nil for options to use the defaults. Parse returns input read errors
-// directly. Other errors support errors.Is with ErrNoBody, ErrInvalidURL, or
-// ErrNoContent. Parse can also return a *TooManyElementsError.
-func Parse(input io.Reader, pageURL string, options *Options) (*Article, error) {
-	article, err := engine.Parse(input, pageURL, optionsToEngine(options))
+// With no options, Parse uses the Mozilla defaults. Parse returns input read
+// errors directly. Other errors support errors.Is with ErrNoBody,
+// ErrInvalidURL, or ErrNoContent. Parse can also return a
+// *TooManyElementsError.
+func Parse(input io.Reader, pageURL string, opts ...Option) (*Article, error) {
+	article, err := engine.Parse(input, pageURL, optionsToEngine(opts))
 	if err != nil {
 		return nil, publicError(err)
 	}
@@ -163,9 +201,9 @@ func Parse(input io.Reader, pageURL string, options *Options) (*Article, error) 
 // root can be a complete document or a tree with a body root. ParseNode does
 // not change root. The caller must not change root while ParseNode uses it.
 // pageURL can be empty; a nonempty value must be an absolute HTTP or HTTPS URL
-// with a host. Pass nil for options to use the defaults.
-func ParseNode(root *html.Node, pageURL string, options *Options) (*Article, error) {
-	article, err := engine.ParseNode(root, pageURL, optionsToEngine(options))
+// with a host. With no options, ParseNode uses the Mozilla defaults.
+func ParseNode(root *html.Node, pageURL string, opts ...Option) (*Article, error) {
+	article, err := engine.ParseNode(root, pageURL, optionsToEngine(opts))
 	if err != nil {
 		return nil, publicError(err)
 	}
@@ -174,55 +212,62 @@ func ParseNode(root *html.Node, pageURL string, options *Options) (*Article, err
 
 // IsProbablyReaderable reports whether input is likely to contain an article.
 // It applies a fast heuristic and does not extract the article.
-func IsProbablyReaderable(input string, options *ReaderableOptions) bool {
-	return engine.IsProbablyReaderable(input, readerableOptionsToEngine(options))
+func IsProbablyReaderable(input string, opts ...ReaderableOption) bool {
+	return engine.IsProbablyReaderable(input, readerableOptionsToEngine(opts))
 }
 
 // IsProbablyReaderableNode reports whether a parsed HTML tree is likely to
 // contain an article. It does not change root.
-func IsProbablyReaderableNode(root *html.Node, options *ReaderableOptions) bool {
-	return engine.IsProbablyReaderableNode(root, readerableOptionsToEngine(options))
+func IsProbablyReaderableNode(root *html.Node, opts ...ReaderableOption) bool {
+	return engine.IsProbablyReaderableNode(root, readerableOptionsToEngine(opts))
 }
 
-func optionsToEngine(options *Options) *engine.Options {
-	if options == nil {
-		return nil
+func optionsToEngine(opts []Option) *engine.Options {
+	defaults := engine.DefaultOptions()
+	o := options{
+		maxElemsToParse:     defaults.MaxElemsToParse,
+		nbTopCandidates:     defaults.NbTopCandidates,
+		charThreshold:       defaults.CharThreshold,
+		classesToPreserve:   append([]string(nil), defaults.ClassesToPreserve...),
+		keepClasses:         defaults.KeepClasses,
+		disableJSONLD:       defaults.DisableJSONLD,
+		allowedVideoRegex:   defaults.AllowedVideoRegex,
+		linkDensityModifier: defaults.LinkDensityModifier,
+		logger:              defaults.Logger,
+		debug:               defaults.Debug,
+	}
+	for _, option := range opts {
+		if option != nil {
+			option(&o)
+		}
 	}
 	return &engine.Options{
-		MaxElemsToParse:     options.MaxElemsToParse,
-		NbTopCandidates:     options.NbTopCandidates,
-		CharThreshold:       options.CharThreshold,
-		ClassesToPreserve:   append([]string(nil), options.ClassesToPreserve...),
-		KeepClasses:         options.KeepClasses,
-		DisableJSONLD:       options.DisableJSONLD,
-		AllowedVideoRegex:   options.AllowedVideoRegex,
-		LinkDensityModifier: options.LinkDensityModifier,
-		Logger:              options.Logger,
-		Debug:               options.Debug,
+		MaxElemsToParse:     o.maxElemsToParse,
+		NbTopCandidates:     o.nbTopCandidates,
+		CharThreshold:       o.charThreshold,
+		ClassesToPreserve:   append([]string(nil), o.classesToPreserve...),
+		KeepClasses:         o.keepClasses,
+		DisableJSONLD:       o.disableJSONLD,
+		AllowedVideoRegex:   o.allowedVideoRegex,
+		LinkDensityModifier: o.linkDensityModifier,
+		Logger:              o.logger,
+		Debug:               o.debug,
 	}
 }
 
-func optionsFromEngine(options engine.Options) Options {
-	return Options{
-		MaxElemsToParse:     options.MaxElemsToParse,
-		NbTopCandidates:     options.NbTopCandidates,
-		CharThreshold:       options.CharThreshold,
-		ClassesToPreserve:   append([]string(nil), options.ClassesToPreserve...),
-		KeepClasses:         options.KeepClasses,
-		DisableJSONLD:       options.DisableJSONLD,
-		AllowedVideoRegex:   options.AllowedVideoRegex,
-		LinkDensityModifier: options.LinkDensityModifier,
-		Logger:              options.Logger,
-		Debug:               options.Debug,
+func readerableOptionsToEngine(opts []ReaderableOption) *engine.ReaderableOptions {
+	defaults := engine.DefaultReaderableOptions()
+	o := readerableOptions{
+		minScore:         defaults.MinScore,
+		minContentLength: defaults.MinContentLength,
 	}
-}
-
-func readerableOptionsToEngine(options *ReaderableOptions) *engine.ReaderableOptions {
-	if options == nil {
-		return nil
+	for _, option := range opts {
+		if option != nil {
+			option(&o)
+		}
 	}
 	return &engine.ReaderableOptions{
-		MinScore: options.MinScore, MinContentLength: options.MinContentLength,
+		MinScore: o.minScore, MinContentLength: o.minContentLength,
 	}
 }
 

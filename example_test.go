@@ -14,9 +14,11 @@ func ExampleParse() {
 <body><article><h1>Hello</h1><p>This is a useful article paragraph.</p></article></body>
 </html>`
 
-	options := readability.DefaultOptions()
-	options.CharThreshold = 0
-	article, err := readability.Parse(strings.NewReader(source), "https://example.com/", &options)
+	article, err := readability.Parse(
+		strings.NewReader(source),
+		"https://example.com/",
+		readability.WithCharThreshold(0),
+	)
 	if err != nil {
 		fmt.Println("error:", err)
 		return
@@ -28,7 +30,7 @@ func ExampleParse() {
 
 func ExampleIsProbablyReaderable() {
 	source := `<article><p>short</p></article>`
-	fmt.Println(readability.IsProbablyReaderable(source, nil))
+	fmt.Println(readability.IsProbablyReaderable(source))
 	// Output: false
 }
 
@@ -44,12 +46,10 @@ func ExampleParseNode() {
 		return
 	}
 
-	options := readability.DefaultOptions()
-	options.CharThreshold = 0
 	article, err := readability.ParseNode(
 		document,
 		"https://example.com/news",
-		&options,
+		readability.WithCharThreshold(0),
 	)
 	if err != nil {
 		fmt.Println("error:", err)
@@ -68,6 +68,6 @@ func ExampleIsProbablyReaderableNode() {
 		return
 	}
 
-	fmt.Println(readability.IsProbablyReaderableNode(document, nil))
+	fmt.Println(readability.IsProbablyReaderableNode(document))
 	// Output: false
 }

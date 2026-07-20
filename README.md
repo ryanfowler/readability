@@ -45,7 +45,7 @@ func main() {
 <body><article><p>This is the article text.</p></article></body>
 </html>`
 
-    article, err := readability.Parse(strings.NewReader(source), "https://example.com/news/1", nil)
+    article, err := readability.Parse(strings.NewReader(source), "https://example.com/news/1")
     if err != nil {
         log.Fatal(err)
     }
@@ -57,15 +57,15 @@ func main() {
 
 Use the source page URL when it is available. The package uses this URL and the document `<base>` element to resolve relative links and media URLs. The page URL can be empty. A nonempty page URL must be an absolute HTTP or HTTPS URL with a host.
 
-A `nil` options pointer selects the default options.
+Calling `Parse` without functional options selects the default settings.
 
 ## Check a page before extraction
 
 `IsProbablyReaderable` applies a fast heuristic. It does not extract the article. Use it when you only need to know if a page is likely to contain an article:
 
 ```go
-if readability.IsProbablyReaderable(source, nil) {
-    article, err := readability.Parse(strings.NewReader(source), pageURL, nil)
+if readability.IsProbablyReaderable(source) {
+    article, err := readability.Parse(strings.NewReader(source), pageURL)
     if err != nil {
         log.Printf("extraction failed: %v", err)
         return
@@ -86,8 +86,8 @@ if err != nil {
     // Handle the error.
 }
 
-if readability.IsProbablyReaderableNode(doc, nil) {
-    article, err := readability.ParseNode(doc, pageURL, nil)
+if readability.IsProbablyReaderableNode(doc) {
+    article, err := readability.ParseNode(doc, pageURL)
     if err != nil {
         log.Printf("extraction failed: %v", err)
         return
@@ -100,41 +100,44 @@ The node functions accept a complete document or a tree that has a `body` root. 
 
 ## Configure extraction
 
-Start with `DefaultOptions` when you want to change one or more extraction options:
+Pass functional options after the page URL. Unspecified settings retain their defaults:
 
 ```go
-options := readability.DefaultOptions()
-options.CharThreshold = 100
-options.MaxElemsToParse = 50_000
-
-article, err := readability.Parse(strings.NewReader(source), pageURL, &options)
+article, err := readability.Parse(
+    strings.NewReader(source),
+    pageURL,
+    readability.WithCharThreshold(100),
+    readability.WithMaxElemsToParse(50_000),
+)
 ```
 
-Do not use a partial struct literal unless you need its zero values. A non-nil `Options` value supplies the full configuration. The exception is `AllowedVideoRegex`: a nil value keeps the built-in video allowlist.
+Options are reusable and are applied from left to right. If a setting appears more than once, the last option wins.
 
-| Option | Default | Function |
+| Functional option | Default | Function |
 | --- | ---: | --- |
-| `MaxElemsToParse` | `0` | Sets the maximum number of HTML elements. Zero removes the limit. |
-| `NbTopCandidates` | `5` | Sets the number of top article candidates to compare. |
-| `CharThreshold` | `500` | Retries extraction when the result is shorter than this value. Zero prevents retries. |
-| `ClassesToPreserve` | `[]string{"page"}` | Lists the CSS classes to retain when class cleanup is active. |
-| `KeepClasses` | `false` | Retains all CSS classes when true. |
-| `DisableJSONLD` | `false` | Prevents metadata extraction from JSON-LD when true. |
-| `AllowedVideoRegex` | Built-in allowlist | Identifies video URLs that cleanup can retain. |
-| `LinkDensityModifier` | `0` | Changes the link-density limits that remove a candidate. |
-| `Logger` | `nil` | Receives extraction log records. Nil turns logs off. |
-| `Debug` | `false` | Adds verbose debug data to log records when true. |
+| `WithMaxElemsToParse(0)` | `0` | Sets the maximum number of HTML elements. Zero removes the limit. |
+| `WithNbTopCandidates(5)` | `5` | Sets the number of top article candidates to compare. |
+| `WithCharThreshold(500)` | `500` | Retries extraction when the result is shorter than this value. Zero prevents retries. |
+| `WithClassesToPreserve("page")` | `[]string{"page"}` | Lists the CSS classes to retain when class cleanup is active. |
+| `WithKeepClasses(false)` | `false` | Retains all CSS classes when true. |
+| `WithDisableJSONLD(false)` | `false` | Prevents metadata extraction from JSON-LD when true. |
+| `WithAllowedVideoRegex(pattern)` | Built-in allowlist | Identifies video URLs that cleanup can retain. A nil pattern selects the built-in allowlist. |
+| `WithLinkDensityModifier(0)` | `0` | Changes the link-density limits that remove a candidate. |
+| `WithLogger(logger)` | `nil` | Receives extraction log records. Nil turns logs off. |
+| `WithDebug(false)` | `false` | Adds verbose debug data to log records when true. |
 
-`CharThreshold` controls extraction retries. If a result is too short, the package retries with less strict removal and cleanup rules. If all results are too short, the package returns the longest nonempty result.
+`WithCharThreshold` controls extraction retries. If a result is too short, the package retries with less strict removal and cleanup rules. If all results are too short, the package returns the longest nonempty result.
 
-Set `Options.Logger` to a `*slog.Logger` to receive logs. The logger handler controls the log level and output. The package does not use the global `slog` logger.
+Pass `WithLogger` a `*slog.Logger` to receive logs. The logger handler controls the log level and output. The package does not use the global `slog` logger.
 
-Use `DefaultReaderableOptions` to change the readerability heuristic:
+The heuristic has separate options:
 
 ```go
-options := readability.DefaultReaderableOptions()
-options.MinContentLength = 200
-likely := readability.IsProbablyReaderable(source, &options)
+likely := readability.IsProbablyReaderable(
+    source,
+    readability.WithMinContentLength(200),
+    readability.WithMinScore(20),
+)
 ```
 
 ## Character counts
@@ -142,8 +145,8 @@ likely := readability.IsProbablyReaderable(source, &options)
 These values use UTF-16 code units:
 
 - `Article.Length`
-- `Options.CharThreshold`
-- `ReaderableOptions.MinContentLength`
+- The value passed to `WithCharThreshold`
+- The value passed to `WithMinContentLength`
 
 This rule matches JavaScript `String.length` and Mozilla Readability. Most characters count as one unit. A character outside the Basic Multilingual Plane, such as many emoji, counts as two units.
 
@@ -158,7 +161,11 @@ Errors encountered while reading the input are returned directly. Use `errors.Is
 Use `errors.As` to inspect an element-limit error:
 
 ```go
-_, err := readability.Parse(strings.NewReader(source), pageURL, &options)
+_, err := readability.Parse(
+    strings.NewReader(source),
+    pageURL,
+    readability.WithMaxElemsToParse(50_000),
+)
 if err != nil {
     var limitErr *readability.TooManyElementsError
     switch {
@@ -179,7 +186,7 @@ Treat all extracted data as untrusted input.
 - Sanitize `Article.Content` before you add it to a web page.
 - Sanitize or validate `Article.Node` before you render it.
 - Escape plain-text metadata for its output context.
-- Set `MaxElemsToParse` when you process HTML from an untrusted source and need an element limit.
+- Pass `WithMaxElemsToParse` when you process HTML from an untrusted source and need an element limit.
 
 ## Compatibility
 
