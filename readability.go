@@ -111,15 +111,6 @@ type attempt struct {
 	textLength     int
 }
 
-// newEngine creates an engine with a private copy of doc. The engine can use
-// the original tree to restore the document for an extraction retry.
-func newEngine(doc *html.Node, uri string, opts ...engineOption) (*engine, error) {
-	if doc == nil {
-		return nil, fmt.Errorf("first argument to engine constructor should be a HTML document")
-	}
-	return newEngineWithOriginal(doc, cloneTree(doc), uri, opts...)
-}
-
 // newEngineFromReadOnlyNode uses doc as the immutable retry snapshot and
 // mutates only an internal clone. Callers must not mutate doc while parsing.
 func newEngineFromReadOnlyNode(doc *html.Node, uri string, opts ...engineOption) (*engine, error) {
@@ -284,17 +275,6 @@ func (r *engine) someNode(nodeList []*html.Node, fn func(n *html.Node) bool) boo
 		}
 	}
 	return false
-}
-
-// Iterate over a NodeList, return true if all of the provided iterate
-// function calls return true, false otherwise.
-func (r *engine) everyNode(nodeList []*html.Node, fn func(n *html.Node) bool) bool {
-	for _, node := range nodeList {
-		if !fn(node) {
-			return false
-		}
-	}
-	return true
 }
 
 // Concat all nodelists passed as arguments.
@@ -2109,20 +2089,6 @@ func (c *normalizedTextCounter) add(s string) {
 		}
 		c.started = true
 	}
-}
-
-// normalizedTextCharacterCount computes the UTF-16 length used by
-// getLinkDensity without materializing textContent (which can otherwise make
-// nested candidates use quadratic amounts of temporary memory).
-func normalizedTextCharacterCount(element *html.Node) int {
-	var counter normalizedTextCounter
-	walkNodes(element, func(n *html.Node) bool {
-		if n.Type == html.TextNode {
-			counter.add(n.Data)
-		}
-		return false
-	})
-	return counter.length
 }
 
 // Get an elements class/id weight. Uses regular expressions to tell if this

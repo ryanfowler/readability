@@ -41,26 +41,6 @@ func countElementsByTagName(n *html.Node, tag string) int {
 	})
 	return count
 }
-func childNodes(n *html.Node) []*html.Node {
-	var out []*html.Node
-	if n != nil {
-		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			out = append(out, c)
-		}
-	}
-	return out
-}
-func elementChildren(n *html.Node) []*html.Node {
-	var out []*html.Node
-	if n != nil {
-		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			if c.Type == html.ElementNode {
-				out = append(out, c)
-			}
-		}
-	}
-	return out
-}
 func firstChild(n *html.Node) *html.Node {
 	if n == nil {
 		return nil
@@ -75,7 +55,7 @@ func lastChild(n *html.Node) *html.Node {
 }
 
 // singleElementChild returns the only direct element child without
-// materializing an elementChildren slice.
+// materializing a temporary slice.
 func singleElementChild(n *html.Node) (*html.Node, bool) {
 	var only *html.Node
 	if n != nil {
