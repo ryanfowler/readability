@@ -89,7 +89,7 @@ func TestMozillaCorpus(t *testing.T) {
 		name := filepath.Base(filepath.Dir(source))
 		t.Run(name, func(t *testing.T) {
 			input := readFile(t, source)
-			a, e := Parse(input, "http://fakehost/test/"+name, nil)
+			a, e := Parse(strings.NewReader(input), "http://fakehost/test/"+name, nil)
 			if e != nil {
 				t.Fatal(e)
 			}

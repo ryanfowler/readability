@@ -1,6 +1,6 @@
 // Package readability extracts the main article and its metadata from HTML.
 //
-// Use Parse for an HTML string. Use ParseNode for a tree that was parsed with
+// Use Parse for HTML from an io.Reader. Use ParseNode for a tree parsed with
 // golang.org/x/net/html. Use IsProbablyReaderable or
 // IsProbablyReaderableNode when you only need a fast readerability check.
 //

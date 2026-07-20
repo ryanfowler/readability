@@ -88,9 +88,8 @@ type engine struct {
 	options  *engineOptions
 	flags    int
 	original *html.Node
-	// restoreDocument returns a fresh parser-produced tree for extraction
-	// retries. Parse supplies a lazy reparse closure so successful first-pass
-	// extraction does not need an eagerly cloned snapshot.
+	// restoreDocument reparses the source for extraction retries. Parse supplies
+	// it so the initial parser-produced tree can be mutated without cloning.
 	restoreDocument func() *html.Node
 	doc             *html.Node
 	body            *html.Node
@@ -120,8 +119,7 @@ func newEngineFromReadOnlyNode(doc *html.Node, uri string, opts ...engineOption)
 	return newEngineWithOriginal(cloneTree(doc), doc, uri, opts...)
 }
 
-// newEngineFromOwnedNode may mutate doc. It restores retries with restore,
-// avoiding an eager snapshot when the caller can cheaply recreate the tree.
+// newEngineFromOwnedNode may mutate doc and reparses the source on retries.
 func newEngineFromOwnedNode(doc *html.Node, restore func() *html.Node, uri string, opts ...engineOption) (*engine, error) {
 	if doc == nil {
 		return nil, fmt.Errorf("first argument to engine constructor should be a HTML document")
@@ -2584,8 +2582,8 @@ func (r *engine) prepareDocumentTree() {
 	r.prepDocument()
 }
 
-// resetDocumentForRetry restores the parser-produced tree from either an
-// immutable snapshot or the source-backed restore function.
+// resetDocumentForRetry restores the parser-produced tree by reparsing the
+// source or cloning the immutable ParseNode input.
 func (r *engine) resetDocumentForRetry() {
 	var doc *html.Node
 	if r.restoreDocument != nil {

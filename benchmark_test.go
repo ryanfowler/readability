@@ -21,7 +21,7 @@ func BenchmarkParse(b *testing.B) {
 			b.ReportAllocs()
 			b.SetBytes(int64(len(data)))
 			for i := 0; i < b.N; i++ {
-				if _, err := Parse(input, "http://fakehost/test/"+name, nil); err != nil {
+				if _, err := Parse(strings.NewReader(input), "http://fakehost/test/"+name, nil); err != nil {
 					b.Fatal(err)
 				}
 			}
@@ -53,7 +53,7 @@ func BenchmarkParseRetryModes(b *testing.B) {
 			b.ReportAllocs()
 			b.SetBytes(int64(len(data)))
 			for i := 0; i < b.N; i++ {
-				if _, err := Parse(input, "http://fakehost/test/medium-2", benchmark.options); err != nil {
+				if _, err := Parse(strings.NewReader(input), "http://fakehost/test/medium-2", benchmark.options); err != nil {
 					b.Fatal(err)
 				}
 			}

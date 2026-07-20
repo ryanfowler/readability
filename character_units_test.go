@@ -30,7 +30,7 @@ func TestReaderableLengthsUseUTF16CodeUnits(t *testing.T) {
 func TestArticleLengthUsesUTF16CodeUnits(t *testing.T) {
 	opts := DefaultOptions()
 	opts.CharThreshold = 0
-	article, err := Parse(`<html><body><article><p>`+strings.Repeat("text 😀 ", 20)+`</p></article></body></html>`, "https://example.com/", &opts)
+	article, err := Parse(strings.NewReader(`<html><body><article><p>`+strings.Repeat("text 😀 ", 20)+`</p></article></body></html>`), "https://example.com/", &opts)
 	if err != nil {
 		t.Fatal(err)
 	}

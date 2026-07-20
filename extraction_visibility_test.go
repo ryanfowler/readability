@@ -21,7 +21,7 @@ func TestParseRemovesImportantHiddenContent(t *testing.T) {
 	</body></html>`
 	opts := DefaultOptions()
 	opts.CharThreshold = 0
-	article, err := Parse(source, "https://example.com/article", &opts)
+	article, err := Parse(strings.NewReader(source), "https://example.com/article", &opts)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
