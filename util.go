@@ -1,10 +1,6 @@
 package readability
 
-import (
-	"slices"
-
-	"golang.org/x/net/html"
-)
+import "golang.org/x/net/html"
 
 // characterCount returns the number of UTF-16 code units in s. Readability's
 // thresholds originate in JavaScript, where String.length has this semantic.
@@ -19,21 +15,10 @@ func characterCount(s string) int {
 	return count
 }
 
-func indexOf[T any](el *T, a []*T) int {
-	return slices.IndexFunc(a, func(ell *T) bool {
-		return ell == el
-	})
-}
-
-func delete[T any](idx int, a []*T) []*T {
-	copy(a[idx:], a[idx+1:])
-	a[len(a)-1] = nil
-	a = a[:len(a)-1]
-	return a
-}
-
 func insert(newNode *html.Node, idx int, nodes []*html.Node) []*html.Node {
-	nodes = append(nodes[:idx], append([]*html.Node{newNode}, nodes[idx:]...)...)
+	nodes = append(nodes, nil)
+	copy(nodes[idx+1:], nodes[idx:])
+	nodes[idx] = newNode
 	return nodes
 }
 
