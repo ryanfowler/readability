@@ -1,7 +1,7 @@
 package readability
 
 import (
-	"strconv"
+	stdhtml "html"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -721,54 +721,6 @@ func findElement(n *html.Node, tag string) *html.Node {
 	return nil
 }
 
-func decodeHTML(s string) (string, error) {
-	var out strings.Builder
-	for i := 0; i < len(s); {
-		if s[i] != '&' {
-			out.WriteByte(s[i])
-			i++
-			continue
-		}
-		end := strings.IndexByte(s[i:], ';')
-		if end < 0 {
-			out.WriteByte('&')
-			i++
-			continue
-		}
-		end += i
-		entity, replacement := s[i+1:end], ""
-		switch entity {
-		case "lt":
-			replacement = "<"
-		case "gt":
-			replacement = ">"
-		case "amp":
-			replacement = "&"
-		case "quot":
-			replacement = "\""
-		case "apos", "#039":
-			replacement = "'"
-		}
-		if strings.HasPrefix(entity, "#") {
-			base, digits := 10, entity[1:]
-			if len(digits) > 1 && (digits[0] == 'x' || digits[0] == 'X') {
-				base, digits = 16, digits[1:]
-			}
-			if n, err := strconv.ParseUint(digits, base, 32); err == nil {
-				if n == 0 || n > 0x10ffff || n >= 0xd800 && n <= 0xdfff {
-					replacement = "�"
-				} else {
-					replacement = string(rune(n))
-				}
-			}
-		}
-		if replacement == "" {
-			out.WriteByte('&')
-			i++
-			continue
-		}
-		out.WriteString(replacement)
-		i = end + 1
-	}
-	return out.String(), nil
+func decodeHTML(s string) string {
+	return stdhtml.UnescapeString(s)
 }

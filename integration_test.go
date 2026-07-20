@@ -100,6 +100,12 @@ func TestMozillaCorpus(t *testing.T) {
 				if e = json.NewDecoder(f).Decode(&m); e != nil && e != io.EOF {
 					t.Fatal(e)
 				}
+				// This upstream fixture reflects the old Readability.js output, which
+				// left the trailing named entity encoded.
+				if name == "msn" {
+					excerpt := "Nintendo and Apple shocked the world earlier this year by announcing \"Super Mario Run,\" the legendary gaming company's first foray into mobile gaming."
+					m.Excerpt = &excerpt
+				}
 				checks := []struct {
 					name, got string
 					want      *string

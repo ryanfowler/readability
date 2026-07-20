@@ -1467,16 +1467,9 @@ func (r *engine) isValidByline(possibleByline string) bool {
 	return bylineLen > 0 && bylineLen < 100
 }
 
-// Converts some of the common HTML entities in string to their corresponding characters.
+// Converts HTML entities in string to their corresponding characters.
 func (r *engine) unescapeHtmlEntities(str string) string {
-	if str == "" {
-		return str
-	}
-	decoded, err := decodeHTML(str)
-	if err != nil {
-		r.logError(err.Error())
-	}
-	return decoded
+	return decodeHTML(str)
 }
 
 type metadata struct {
