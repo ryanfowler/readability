@@ -137,12 +137,11 @@ var (
 	singleWhitespace     = regexp.MustCompile(`\s`)
 	singleDot            = regexp.MustCompile(`\.`)
 	// https://www.dcs.bbk.ac.uk/~ptw/teaching/DBM/XML/slide17.html
-	entityReferencesRgx  = regexp.MustCompile(`&(quot|amp|apos|lt|gt);`)
-	htmlCharCodesRgx     = regexp.MustCompile(`(?i)&#(?:x([0-9a-fA-F]{1,4})|([0-9]{1,5}));`)
-	doubleForwardSlashes = regexp.MustCompile(`//[^/]+`)
-	separators           = regexp.MustCompile(`[\|\-–—\\\/>»]+`)
-	cdata                = regexp.MustCompile(`^\s*<!\[CDATA\[|\]\]>\s*$`)
-	schemaUrl            = regexp.MustCompile(`^https?\:\/\/schema\.org\/?$`)
+	entityReferencesRgx = regexp.MustCompile(`&(quot|amp|apos|lt|gt);`)
+	htmlCharCodesRgx    = regexp.MustCompile(`(?i)&#(?:x([0-9a-fA-F]{1,4})|([0-9]{1,5}));`)
+	separators          = regexp.MustCompile(`[\|\-–—\\\/>»]+`)
+	cdata               = regexp.MustCompile(`^\s*<!\[CDATA\[|\]\]>\s*$`)
+	schemaUrl           = regexp.MustCompile(`^https?\:\/\/schema\.org\/?$`)
 	// property is a space-separated list of values
 	propertyPattern = regexp.MustCompile(`(?i)\s*(article|dc|dcterm|og|twitter)\s*:\s*(author|creator|description|published_time|title|site_name)\s*`)
 	// name is a single value

@@ -53,6 +53,44 @@ func TestBaseURIUsesFirstBaseElement(t *testing.T) {
 	}
 }
 
+func TestFixRelativeUrisPreservesResolvedURLComponents(t *testing.T) {
+	tests := []struct {
+		name string
+		uri  string
+		want string
+	}{
+		{"user info", "https://user:pass@example.com/path", "https://user:pass@example.com/path"},
+		{"port", "https://example.com:8443/path", "https://example.com:8443/path"},
+		{"IPv6", "http://[2001:db8::1]:8080/path", "http://[2001:db8::1]:8080/path"},
+		{"non-HTTP scheme", "web+demo://user@Mixed.EXAMPLE:90/path", "web+demo://user@Mixed.EXAMPLE:90/path"},
+		{"encoded path and fragment", "/a%2Fb/%E2%98%83#x%2Fy", "https://base.example/a%2Fb/%E2%98%83#x%2Fy"},
+		{"empty query", "relative?", "https://base.example/dir/relative?"},
+		{"empty fragment", "relative#", "https://base.example/dir/relative#"},
+		{"empty query and fragment", "relative?#", "https://base.example/dir/relative?#"},
+		{"protocol relative", "//user:pass@Mixed.EXAMPLE:81/path", "https://user:pass@Mixed.EXAMPLE:81/path"},
+		{"Unicode host", "https://例え.テスト/道", "https://%E4%BE%8B%E3%81%88.%E3%83%86%E3%82%B9%E3%83%88/%E9%81%93"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			doc := &html.Node{Type: html.DocumentNode}
+			body := newElement("body")
+			doc.AppendChild(body)
+			article := newElement("div")
+			body.AppendChild(article)
+			link := newElement("a")
+			setAttribute(link, "href", tt.uri)
+			article.AppendChild(link)
+
+			r := &engine{doc: doc, body: body, documentURI: "https://base.example/dir/page", options: defaultOpts(), nodeState: make(map[*html.Node]*nodeData)}
+			r.fixRelativeUris(article)
+			if got := getAttribute(link, "href"); got != tt.want {
+				t.Errorf("href = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestFixRelativeUrisRemovesNormalizedJavascriptLinks(t *testing.T) {
 	doc := &html.Node{Type: html.DocumentNode}
 	body := newElement("body")
