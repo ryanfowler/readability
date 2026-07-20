@@ -19,7 +19,7 @@ func TestParseRequiresAbsoluteHTTPPageURL(t *testing.T) {
 		"https://:443/article",
 	} {
 		t.Run(pageURL, func(t *testing.T) {
-			_, err := Parse(input, pageURL, nil)
+			_, err := Parse(strings.NewReader(input), pageURL, nil)
 			if !errors.Is(err, ErrInvalidURL) {
 				t.Fatalf("Parse error = %v, want ErrInvalidURL", err)
 			}

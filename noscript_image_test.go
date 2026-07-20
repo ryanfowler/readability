@@ -13,7 +13,7 @@ func TestParseUnwrapsNoscriptImage(t *testing.T) {
 </article></body></html>`
 	opts := DefaultOptions()
 	opts.CharThreshold = 0
-	article, err := Parse(source, "https://example.com/story", &opts)
+	article, err := Parse(strings.NewReader(source), "https://example.com/story", &opts)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}

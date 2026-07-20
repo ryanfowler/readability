@@ -26,7 +26,7 @@ go get github.com/ryanfowler/readability
 
 ## Quick start
 
-Pass the HTML source and the page URL to `Parse`:
+Pass an HTML reader and the page URL to `Parse`:
 
 ```go
 package main
@@ -34,6 +34,7 @@ package main
 import (
     "fmt"
     "log"
+    "strings"
 
     "github.com/ryanfowler/readability"
 )
@@ -44,7 +45,7 @@ func main() {
 <body><article><p>This is the article text.</p></article></body>
 </html>`
 
-    article, err := readability.Parse(source, "https://example.com/news/1", nil)
+    article, err := readability.Parse(strings.NewReader(source), "https://example.com/news/1", nil)
     if err != nil {
         log.Fatal(err)
     }
@@ -64,7 +65,7 @@ A `nil` options pointer selects the default options.
 
 ```go
 if readability.IsProbablyReaderable(source, nil) {
-    article, err := readability.Parse(source, pageURL, nil)
+    article, err := readability.Parse(strings.NewReader(source), pageURL, nil)
     if err != nil {
         log.Printf("extraction failed: %v", err)
         return
@@ -106,7 +107,7 @@ options := readability.DefaultOptions()
 options.CharThreshold = 100
 options.MaxElemsToParse = 50_000
 
-article, err := readability.Parse(source, pageURL, &options)
+article, err := readability.Parse(strings.NewReader(source), pageURL, &options)
 ```
 
 Do not use a partial struct literal unless you need its zero values. A non-nil `Options` value supplies the full configuration. The exception is `AllowedVideoRegex`: a nil value keeps the built-in video allowlist.
@@ -148,7 +149,7 @@ This rule matches JavaScript `String.length` and Mozilla Readability. Most chara
 
 ## Handle errors
 
-Use `errors.Is` with the package error values:
+Errors encountered while reading the input are returned directly. Use `errors.Is` with the package error values:
 
 - `ErrNoBody`: the input does not contain a required `body` element.
 - `ErrInvalidURL`: the page URL is not valid.
@@ -157,7 +158,7 @@ Use `errors.Is` with the package error values:
 Use `errors.As` to inspect an element-limit error:
 
 ```go
-_, err := readability.Parse(source, pageURL, &options)
+_, err := readability.Parse(strings.NewReader(source), pageURL, &options)
 if err != nil {
     var limitErr *readability.TooManyElementsError
     switch {

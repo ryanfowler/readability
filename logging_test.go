@@ -17,7 +17,7 @@ func TestParseUsesOptionsLogger(t *testing.T) {
 	opts.Logger = logger
 	opts.Debug = true
 
-	if _, err := Parse(loggingTestDocument, "https://example.com/article", &opts); err != nil {
+	if _, err := Parse(strings.NewReader(loggingTestDocument), "https://example.com/article", &opts); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(output.String(), "grabArticle") {
@@ -32,7 +32,7 @@ func TestParseDebugDisabled(t *testing.T) {
 	opts.CharThreshold = 0
 	opts.Logger = logger
 
-	if _, err := Parse(loggingTestDocument, "https://example.com/article", &opts); err != nil {
+	if _, err := Parse(strings.NewReader(loggingTestDocument), "https://example.com/article", &opts); err != nil {
 		t.Fatal(err)
 	}
 	if output.Len() != 0 {
@@ -48,7 +48,7 @@ func TestParseDoesNotUseDefaultLogger(t *testing.T) {
 
 	opts := DefaultOptions()
 	opts.CharThreshold = 0
-	if _, err := Parse(loggingTestDocument, "https://example.com/article", &opts); err != nil {
+	if _, err := Parse(strings.NewReader(loggingTestDocument), "https://example.com/article", &opts); err != nil {
 		t.Fatal(err)
 	}
 	if output.Len() != 0 {

@@ -1,9 +1,12 @@
 package readability
 
 import (
+	"bytes"
 	"errors"
+	"io"
 	"strings"
 	"testing"
+	"testing/iotest"
 
 	"golang.org/x/net/html"
 )
@@ -11,7 +14,7 @@ import (
 func TestParseFragment(t *testing.T) {
 	opts := DefaultOptions()
 	opts.CharThreshold = 0
-	article, err := Parse(`<article><h1>Fragment Title</h1><p>A fragment article with readable content.</p></article>`, "https://example.com/story", &opts)
+	article, err := Parse(strings.NewReader(`<article><h1>Fragment Title</h1><p>A fragment article with readable content.</p></article>`), "https://example.com/story", &opts)
 	if err != nil {
 		t.Fatalf("Parse(fragment): %v", err)
 	}
@@ -21,7 +24,7 @@ func TestParseFragment(t *testing.T) {
 }
 
 func TestParseIncludesContentNode(t *testing.T) {
-	article, err := Parse(`<html><body><article><p>Parsed article content.</p></article></body></html>`, "", nil)
+	article, err := Parse(strings.NewReader(`<html><body><article><p>Parsed article content.</p></article></body></html>`), "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +37,7 @@ func TestParseIncludesContentNode(t *testing.T) {
 }
 
 func TestParseNormalizesTextContent(t *testing.T) {
-	article, err := Parse("<html><body><article><p>  First\n\t paragraph.  </p>\n<p>Second\u00a0 paragraph. 😀 </p></article></body></html>", "", nil)
+	article, err := Parse(strings.NewReader("<html><body><article><p>  First\n\t paragraph.  </p>\n<p>Second\u00a0 paragraph. 😀 </p></article></body></html>"), "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +58,7 @@ func TestParsePreservesPreformattedTextContent(t *testing.T) {
 	Tabbed line</pre>
 <p>After sample.</p>
 </article></body></html>`
-	article, err := Parse(input, "", nil)
+	article, err := Parse(strings.NewReader(input), "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +78,7 @@ func TestParseAvoidsRedundantWhitespaceAroundPreformattedText(t *testing.T) {
   code
 </pre>
 <p>After</p></article></body></html>`
-	article, err := Parse(input, "", nil)
+	article, err := Parse(strings.NewReader(input), "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +89,7 @@ func TestParseAvoidsRedundantWhitespaceAroundPreformattedText(t *testing.T) {
 }
 
 func TestParseNoContentErrorContract(t *testing.T) {
-	_, err := Parse(`<html><body></body></html>`, "https://example.com/", nil)
+	_, err := Parse(strings.NewReader(`<html><body></body></html>`), "https://example.com/", nil)
 	if !errors.Is(err, ErrNoContent) {
 		t.Fatalf("errors.Is(err, ErrNoContent) = false; err=%v", err)
 	}
@@ -123,9 +126,72 @@ func TestParseNoBodyDetection(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := Parse(tt.source, "https://example.com/", nil)
+			_, err := Parse(strings.NewReader(tt.source), "https://example.com/", nil)
 			if got := errors.Is(err, ErrNoBody); got != tt.noBody {
 				t.Fatalf("errors.Is(err, ErrNoBody) = %v, want %v; err=%v", got, tt.noBody, err)
+			}
+		})
+	}
+}
+
+func TestParseReturnsReaderError(t *testing.T) {
+	readErr := errors.New("reader failed")
+	_, err := Parse(iotest.ErrReader(readErr), "https://example.com/", nil)
+	if err != readErr {
+		t.Fatalf("Parse() error = %v, want reader error %v", err, readErr)
+	}
+}
+
+func TestParseReplaysReaderForRetries(t *testing.T) {
+	const prefix = "ignored prefix"
+	const source = `<html><body><article><p>Short but non-empty article text.</p></article></body></html>`
+
+	tests := []struct {
+		name   string
+		reader func() io.Reader
+	}{
+		{
+			name: "strings.Reader",
+			reader: func() io.Reader {
+				r := strings.NewReader(prefix + source)
+				_, _ = r.Seek(int64(len(prefix)), io.SeekStart)
+				return r
+			},
+		},
+		{
+			name: "bytes.Reader",
+			reader: func() io.Reader {
+				r := bytes.NewReader([]byte(prefix + source))
+				_, _ = r.Seek(int64(len(prefix)), io.SeekStart)
+				return r
+			},
+		},
+		{
+			name: "bytes.Buffer",
+			reader: func() io.Reader {
+				r := bytes.NewBufferString(prefix + source)
+				r.Next(len(prefix))
+				return r
+			},
+		},
+		{
+			name: "buffered fallback",
+			reader: func() io.Reader {
+				return io.LimitReader(strings.NewReader(source), int64(len(source)))
+			},
+		},
+	}
+
+	opts := DefaultOptions()
+	opts.CharThreshold = 1_000_000
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			article, err := Parse(tt.reader(), "https://example.com/", &opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(article.TextContent, "Short but non-empty") {
+				t.Fatalf("TextContent = %q, want article text", article.TextContent)
 			}
 		})
 	}

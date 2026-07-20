@@ -1,6 +1,9 @@
 package readability
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseDecodesHTMLEntitiesInMetadata(t *testing.T) {
 	const source = `<html><head>
@@ -12,7 +15,7 @@ func TestParseDecodesHTMLEntitiesInMetadata(t *testing.T) {
 
 	opts := DefaultOptions()
 	opts.CharThreshold = 0
-	article, err := Parse(source, "https://example.com/article", &opts)
+	article, err := Parse(strings.NewReader(source), "https://example.com/article", &opts)
 	if err != nil {
 		t.Fatal(err)
 	}

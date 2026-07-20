@@ -16,7 +16,7 @@ func ExampleParse() {
 
 	options := readability.DefaultOptions()
 	options.CharThreshold = 0
-	article, err := readability.Parse(source, "https://example.com/", &options)
+	article, err := readability.Parse(strings.NewReader(source), "https://example.com/", &options)
 	if err != nil {
 		fmt.Println("error:", err)
 		return

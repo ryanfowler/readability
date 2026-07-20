@@ -1,8 +1,10 @@
 package readability
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/url"
 	"regexp"
@@ -129,13 +131,48 @@ func (e *TooManyElementsError) Error() string {
 }
 
 func parseHTML(input string) (*html.Node, error) {
-	doc, err := html.Parse(strings.NewReader(input))
+	return parseHTMLReader(strings.NewReader(input))
+}
+
+func replayableReader(input io.Reader) (io.Reader, func() io.Reader) {
+	switch r := input.(type) {
+	case *strings.Reader:
+		snapshot := *r
+		return r, func() io.Reader {
+			clone := snapshot
+			return &clone
+		}
+	case *bytes.Reader:
+		snapshot := *r
+		return r, func() io.Reader {
+			clone := snapshot
+			return &clone
+		}
+	case *bytes.Buffer:
+		source := r.Bytes()
+		return r, func() io.Reader { return bytes.NewReader(source) }
+	default:
+		var source bytes.Buffer
+		return io.TeeReader(input, &source), func() io.Reader {
+			return bytes.NewReader(source.Bytes())
+		}
+	}
+}
+
+func parseHTMLReader(input io.Reader) (*html.Node, error) {
+	doc, _, err := parseHTMLReaderWithRestore(input)
+	return doc, err
+}
+
+func parseHTMLReaderWithRestore(input io.Reader) (*html.Node, func() *html.Node, error) {
+	reader, replay := replayableReader(input)
+	doc, err := html.Parse(reader)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	bodyNode := findElement(doc, "body")
 	if bodyNode == nil {
-		return nil, ErrNoBody
+		return nil, nil, ErrNoBody
 	}
 	// html.Parse synthesizes a body. Only an empty synthesized body is
 	// ambiguous, so avoid tokenizing every normal document a second time.
@@ -152,7 +189,7 @@ func parseHTML(input string) (*html.Node, error) {
 		// Inspect tokens rather than substrings so <header> and text or attributes
 		// containing "<body" do not count.
 		var hasHTML, hasHead, hasBody bool
-		tokenizer := html.NewTokenizer(strings.NewReader(input))
+		tokenizer := html.NewTokenizer(replay())
 		for {
 			tokenType := tokenizer.Next()
 			if tokenType == html.ErrorToken {
@@ -175,34 +212,31 @@ func parseHTML(input string) (*html.Node, error) {
 			}
 		}
 		if hasHTML && hasHead && !hasBody {
-			return nil, ErrNoBody
+			return nil, nil, ErrNoBody
 		}
 	}
-	return doc, nil
+	restore := func() *html.Node {
+		doc, _ := html.Parse(replay())
+		return doc
+	}
+	return doc, restore, nil
 }
 
-// Parse extracts an article from input.
+// Parse reads HTML from input and extracts an article.
 //
 // pageURL can be empty. If it is not empty, it must be an absolute HTTP or
 // HTTPS URL with a host. Parse uses pageURL and the document base URL to
 // resolve relative links and media URLs.
 //
-// Pass nil for options to use the defaults. Parse returns an error that
-// supports errors.Is with ErrNoBody, ErrInvalidURL, or ErrNoContent. It can
-// also return a *TooManyElementsError.
-func Parse(input, pageURL string, options *Options) (*Article, error) {
-	root, err := parseHTML(input)
+// Pass nil for options to use the defaults. Parse returns input read errors
+// directly. Other errors support errors.Is with ErrNoBody, ErrInvalidURL, or
+// ErrNoContent. Parse can also return a *TooManyElementsError.
+func Parse(input io.Reader, pageURL string, options *Options) (*Article, error) {
+	root, restore, err := parseHTMLReaderWithRestore(input)
 	if err != nil {
 		return nil, err
 	}
-	// The parsed tree is owned by this call, so extraction can mutate it. If a
-	// retry is needed, recreate the pristine tree lazily instead of cloning every
-	// document up front. strings.Reader cannot make html.Parse fail.
-	restore := func() *html.Node {
-		doc, _ := html.Parse(strings.NewReader(input))
-		return doc
-	}
-	return parseNode(root, pageURL, options, false, restore)
+	return parseNode(root, pageURL, options, restore)
 }
 
 // ParseNode extracts an article from a parsed HTML tree.
@@ -218,10 +252,10 @@ func Parse(input, pageURL string, options *Options) (*Article, error) {
 // supports errors.Is with ErrNoBody, ErrInvalidURL, or ErrNoContent. It can
 // also return a *TooManyElementsError.
 func ParseNode(root *html.Node, pageURL string, options *Options) (*Article, error) {
-	return parseNode(root, pageURL, options, true, nil)
+	return parseNode(root, pageURL, options, nil)
 }
 
-func parseNode(root *html.Node, pageURL string, options *Options, cloneInput bool, restore func() *html.Node) (*Article, error) {
+func parseNode(root *html.Node, pageURL string, options *Options, restore func() *html.Node) (*Article, error) {
 	if root == nil || findElement(root, "body") == nil {
 		return nil, ErrNoBody
 	}
@@ -266,7 +300,7 @@ func parseNode(root *html.Node, pageURL string, options *Options, cloneInput boo
 	}
 	var e *engine
 	var err error
-	if cloneInput {
+	if restore == nil {
 		e, err = newEngineFromReadOnlyNode(root, pageURL, configure)
 	} else {
 		e, err = newEngineFromOwnedNode(root, restore, pageURL, configure)
