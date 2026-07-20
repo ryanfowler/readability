@@ -1060,7 +1060,7 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 
 			class, id := className(n), nodeID(n)
 
-			if !isProbablyVisible(n) {
+			if !isNodeVisible(n) {
 				r.logDebug("Removing hidden node", "class", class, "id", id)
 				n = r.removeAndGetNext(n)
 				continue
@@ -2621,13 +2621,6 @@ func (r *engine) flagIsActive(flag int) bool {
 
 func (r *engine) removeFlag(flag int) {
 	r.flags = r.flags & ^flag
-}
-
-func isProbablyVisible(n *html.Node) bool {
-	// Have to null-check node.style and node.className.indexOf to deal with SVG and MathML nodes.
-	return getStyle(n, "display") != "none" && getStyle(n, "visibility") != "hidden" &&
-		!hasAttribute(n, "hidden") &&
-		(!hasAttribute(n, "aria-hidden") || getAttribute(n, "aria-hidden") != "true" || (className(n) != "" && strings.Contains(className(n), "fallback-image")))
 }
 
 // prepareDocumentTree applies the destructive normalization shared by the
