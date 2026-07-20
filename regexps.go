@@ -128,7 +128,15 @@ var (
 	srcsetUrl  = regexp.MustCompile(`(\S+)(\s+[\d.]+[xw])?(\s*(?:,|$))`)
 	b64DataUrl = regexp.MustCompile(`(?i)^data:\s*([^\s;,]+)\s*;\s*base64\s*,`)
 	// See: https://schema.org/Article
-	jsonLdArticleTypes   = regexp.MustCompile(`^Article|AdvertiserContentArticle|NewsArticle|AnalysisNewsArticle|AskPublicNewsArticle|BackgroundNewsArticle|OpinionNewsArticle|ReportageNewsArticle|ReviewNewsArticle|Report|SatiricalArticle|ScholarlyArticle|MedicalScholarlyArticle|SocialMediaPosting|BlogPosting|LiveBlogPosting|DiscussionForumPosting|TechArticle|APIReference$`)
+	jsonLdArticleTypes = map[string]struct{}{
+		"Article": {}, "AdvertiserContentArticle": {}, "NewsArticle": {},
+		"AnalysisNewsArticle": {}, "AskPublicNewsArticle": {}, "BackgroundNewsArticle": {},
+		"OpinionNewsArticle": {}, "ReportageNewsArticle": {}, "ReviewNewsArticle": {},
+		"Report": {}, "SatiricalArticle": {}, "ScholarlyArticle": {},
+		"MedicalScholarlyArticle": {}, "SocialMediaPosting": {}, "BlogPosting": {},
+		"LiveBlogPosting": {}, "DiscussionForumPosting": {}, "TechArticle": {},
+		"APIReference": {},
+	}
 	titleFinalPart       = regexp.MustCompile(` [\|\-–—\\\/>»] `)
 	titleSeparators      = regexp.MustCompile(` [\\\/>»] `)
 	otherTitleSeparators = regexp.MustCompile(`(?i)(.*)[\|\-–—\\\/>»] .*`)
