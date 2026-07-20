@@ -174,7 +174,7 @@ func (r *engine) data(n *html.Node) *nodeData {
 }
 
 func (r *engine) logDebug(msg string, args ...any) {
-	if r.options.logger != nil {
+	if r.options.debug && r.options.logger != nil {
 		r.options.logger.Debug(msg, args...)
 	}
 }

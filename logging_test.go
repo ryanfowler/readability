@@ -15,12 +15,28 @@ func TestParseUsesOptionsLogger(t *testing.T) {
 	opts := DefaultOptions()
 	opts.CharThreshold = 0
 	opts.Logger = logger
+	opts.Debug = true
 
 	if _, err := Parse(loggingTestDocument, "https://example.com/article", &opts); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(output.String(), "grabArticle") {
 		t.Fatalf("logger output = %q, want extraction log", output.String())
+	}
+}
+
+func TestParseDebugDisabled(t *testing.T) {
+	var output bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&output, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	opts := DefaultOptions()
+	opts.CharThreshold = 0
+	opts.Logger = logger
+
+	if _, err := Parse(loggingTestDocument, "https://example.com/article", &opts); err != nil {
+		t.Fatal(err)
+	}
+	if output.Len() != 0 {
+		t.Fatalf("logger unexpectedly received debug output: %q", output.String())
 	}
 }
 
