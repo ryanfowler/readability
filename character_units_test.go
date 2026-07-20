@@ -64,7 +64,7 @@ func TestBase64PayloadLengthUsesMatchedPrefix(t *testing.T) {
 				t.Fatal(err)
 			}
 			img := findElement(root, "img")
-			(&engine{}).fixLazyImages(root)
+			(&extractor{}).fixLazyImages(root)
 			if got := nodeSrc(img) == tt.src; got != tt.wantSrc {
 				t.Fatalf("original src retained = %v, want %v (src=%q)", got, tt.wantSrc, nodeSrc(img))
 			}
@@ -88,16 +88,13 @@ func TestCharThresholdUsesUTF16CodeUnits(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			engine, err := newEngineFromReadOnlyNode(root, "https://example.com/", func(options *engineOptions) {
-				options.charThreshold = 500
-			})
-			if err != nil {
+			options := defaultExtractionOptions()
+			options.charThreshold = 500
+			extractor := newExtractorFromReadOnlyNode(root, "https://example.com/", options)
+			if _, err := extractor.extract(); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := engine.Parse(); err != nil {
-				t.Fatal(err)
-			}
-			if got := len(engine.attempts); got != tt.wantAttempts {
+			if got := len(extractor.attempts); got != tt.wantAttempts {
 				t.Fatalf("attempt count = %d, want %d", got, tt.wantAttempts)
 			}
 		})

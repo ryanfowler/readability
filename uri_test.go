@@ -46,7 +46,7 @@ func TestBaseURIUsesFirstBaseElement(t *testing.T) {
 	setAttribute(link, "href", "story.html")
 	article.AppendChild(link)
 
-	r := &engine{doc: doc, body: body, documentURI: "https://origin.example/page", options: defaultOpts(), nodeState: make(map[*html.Node]*nodeData)}
+	r := &extractor{doc: doc, body: body, documentURI: "https://origin.example/page", options: defaultExtractionOptions(), nodeState: make(map[*html.Node]*nodeData)}
 	r.fixRelativeUris(article)
 	if got, want := getAttribute(link, "href"), "https://first.example/articles/story.html"; got != want {
 		t.Errorf("href = %q, want %q", got, want)
@@ -82,7 +82,7 @@ func TestFixRelativeUrisPreservesResolvedURLComponents(t *testing.T) {
 			setAttribute(link, "href", tt.uri)
 			article.AppendChild(link)
 
-			r := &engine{doc: doc, body: body, documentURI: "https://base.example/dir/page", options: defaultOpts(), nodeState: make(map[*html.Node]*nodeData)}
+			r := &extractor{doc: doc, body: body, documentURI: "https://base.example/dir/page", options: defaultExtractionOptions(), nodeState: make(map[*html.Node]*nodeData)}
 			r.fixRelativeUris(article)
 			if got := getAttribute(link, "href"); got != tt.want {
 				t.Errorf("href = %q, want %q", got, tt.want)
@@ -114,10 +114,10 @@ func TestFixRelativeUrisRemovesNormalizedJavascriptLinks(t *testing.T) {
 	safe.AppendChild(&html.Node{Type: html.TextNode, Data: "safe"})
 	article.AppendChild(safe)
 
-	r := &engine{doc: doc, body: body, documentURI: "https://example.com/article", options: defaultOpts(), nodeState: make(map[*html.Node]*nodeData)}
+	r := &extractor{doc: doc, body: body, documentURI: "https://example.com/article", options: defaultExtractionOptions(), nodeState: make(map[*html.Node]*nodeData)}
 	r.fixRelativeUris(article)
 
-	links := r.getAllNodesWithTag(article, "a")
+	links := getAllNodesWithTag(article, "a")
 	if len(links) != 1 {
 		t.Fatalf("remaining links = %d, want 1", len(links))
 	}
@@ -137,10 +137,10 @@ func TestFixRelativeUrisRemovesJavascriptLinksWithEmbeddedASCIIWhitespace(t *tes
 	}
 	body := findElement(doc, "body")
 	article := findElement(body, "div")
-	r := &engine{doc: doc, body: body, documentURI: "https://example.com/article", options: defaultOpts(), nodeState: make(map[*html.Node]*nodeData)}
+	r := &extractor{doc: doc, body: body, documentURI: "https://example.com/article", options: defaultExtractionOptions(), nodeState: make(map[*html.Node]*nodeData)}
 	r.fixRelativeUris(article)
 
-	if links := r.getAllNodesWithTag(article, "a"); len(links) != 0 {
+	if links := getAllNodesWithTag(article, "a"); len(links) != 0 {
 		t.Errorf("remaining links = %d, want 0", len(links))
 	}
 }
@@ -154,13 +154,13 @@ func TestFixRelativeUrisProcessesMediaInsideJavascriptLinks(t *testing.T) {
 	}
 	body := findElement(doc, "body")
 	article := findElement(body, "div")
-	r := &engine{doc: doc, body: body, documentURI: "https://example.com/articles/page", options: defaultOpts(), nodeState: make(map[*html.Node]*nodeData)}
+	r := &extractor{doc: doc, body: body, documentURI: "https://example.com/articles/page", options: defaultExtractionOptions(), nodeState: make(map[*html.Node]*nodeData)}
 	r.fixRelativeUris(article)
 
-	if links := r.getAllNodesWithTag(article, "a"); len(links) != 0 {
+	if links := getAllNodesWithTag(article, "a"); len(links) != 0 {
 		t.Errorf("remaining links = %d, want 0", len(links))
 	}
-	images := r.getAllNodesWithTag(article, "img")
+	images := getAllNodesWithTag(article, "img")
 	if len(images) != 1 {
 		t.Fatalf("images = %d, want 1", len(images))
 	}
@@ -184,7 +184,7 @@ func TestFixRelativeUrisWhitespaceOnlyAttributes(t *testing.T) {
 	setAttribute(image, "poster", "\t")
 	setAttribute(image, "srcset", "   ")
 	article.AppendChild(image)
-	r := &engine{doc: doc, body: body, documentURI: "https://example.com/article", options: defaultOpts(), nodeState: make(map[*html.Node]*nodeData)}
+	r := &extractor{doc: doc, body: body, documentURI: "https://example.com/article", options: defaultExtractionOptions(), nodeState: make(map[*html.Node]*nodeData)}
 	r.fixRelativeUris(article)
 	for _, check := range []struct {
 		node *html.Node

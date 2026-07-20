@@ -248,16 +248,13 @@ func TestExtractionUsesAllRetryStagesBelowThreshold(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	engine, err := newEngineFromReadOnlyNode(root, "https://example.com/article", func(options *engineOptions) {
-		options.charThreshold = 1_000_000
-	})
-	if err != nil {
+	options := defaultExtractionOptions()
+	options.charThreshold = 1_000_000
+	extractor := newExtractorFromReadOnlyNode(root, "https://example.com/article", options)
+	if _, err := extractor.extract(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := engine.Parse(); err != nil {
-		t.Fatal(err)
-	}
-	if got, want := len(engine.attempts), 4; got != want {
+	if got, want := len(extractor.attempts), 4; got != want {
 		t.Fatalf("attempt count = %d, want %d", got, want)
 	}
 }

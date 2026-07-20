@@ -42,17 +42,10 @@ func isNodeVisible(node *html.Node) bool {
 }
 
 // isProbablyReaderable applies the fast readerability heuristic to doc.
-// minContentLength sets the minimum candidate length. minScore sets the score
-// that the document must exceed. visibilityChecker identifies visible nodes.
-func isProbablyReaderable(doc *html.Node, opts ...engineOption) bool {
-	options := defaultOpts()
-	for _, opt := range opts {
-		opt(options)
-	}
-
+func isProbablyReaderable(doc *html.Node, minScore float64, minContentLength int) bool {
 	score := 0.0
 	candidate := func(n *html.Node) bool {
-		if !options.visibilityChecker(n) {
+		if !isNodeVisible(n) {
 			return false
 		}
 
@@ -66,11 +59,11 @@ func isProbablyReaderable(doc *html.Node, opts ...engineOption) bool {
 		}
 
 		textContentLength := characterCount(strings.TrimSpace(textContent(n)))
-		if textContentLength < options.minContentLength {
+		if textContentLength < minContentLength {
 			return false
 		}
-		score += math.Sqrt(float64(textContentLength - options.minContentLength))
-		return score > options.minScore
+		score += math.Sqrt(float64(textContentLength - minContentLength))
+		return score > minScore
 	}
 
 	// Readability examines p/pre/article elements first, followed by each unique
