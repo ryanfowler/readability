@@ -31,3 +31,22 @@ func TestGetStylePreservesColonAndUsesLastDeclaration(t *testing.T) {
 		t.Fatalf("getStyle(display) = %q, want block", got)
 	}
 }
+
+func TestGetStyleImportantCascade(t *testing.T) {
+	tests := []struct {
+		style string
+		want  string
+	}{
+		{"display:none !important; display:block", "none"},
+		{"display:none; display:block !important", "block"},
+		{"display:none !important; display:block !important", "block"},
+		{"display:none; display:block", "block"},
+	}
+	for _, tt := range tests {
+		node := newElement("div")
+		setAttribute(node, "style", tt.style)
+		if got := getStyle(node, "display"); got != tt.want {
+			t.Errorf("getStyle(display) for %q = %q, want %q", tt.style, got, tt.want)
+		}
+	}
+}

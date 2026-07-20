@@ -665,6 +665,7 @@ func getStyle(n *html.Node, key string) string {
 	}
 	style := getAttribute(n, "style")
 	var value string
+	winningImportant := false
 	for len(style) != 0 {
 		part := style
 		if i := strings.IndexByte(style, ';'); i >= 0 {
@@ -674,9 +675,17 @@ func getStyle(n *html.Node, key string) string {
 		}
 		k, v, ok := strings.Cut(part, ":")
 		if ok && strings.EqualFold(strings.TrimSpace(k), key) {
-			value = strings.TrimSpace(v)
-			if i := strings.LastIndexByte(value, '!'); i >= 0 && isCSSImportant(value[i+1:]) {
-				value = strings.TrimSpace(value[:i])
+			candidate := strings.TrimSpace(v)
+			candidateImportant := false
+			if i := strings.LastIndexByte(candidate, '!'); i >= 0 && isCSSImportant(candidate[i+1:]) {
+				candidate = strings.TrimSpace(candidate[:i])
+				candidateImportant = true
+			}
+			// A later declaration wins among declarations with equal priority,
+			// but a non-important declaration cannot override an important one.
+			if candidateImportant || !winningImportant {
+				value = candidate
+				winningImportant = candidateImportant
 			}
 		}
 	}
