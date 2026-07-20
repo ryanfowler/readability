@@ -107,6 +107,30 @@ func TestFixRelativeUrisRemovesJavascriptLinksWithEmbeddedASCIIWhitespace(t *tes
 	}
 }
 
+func TestFixRelativeUrisProcessesMediaInsideJavascriptLinks(t *testing.T) {
+	doc, err := html.Parse(strings.NewReader(`<html><body><div>
+		<a href="javascript:void(0)"><img src="images/article.jpg"></a>
+	</div></body></html>`))
+	if err != nil {
+		t.Fatalf("html.Parse: %v", err)
+	}
+	body := findElement(doc, "body")
+	article := findElement(body, "div")
+	r := &engine{doc: doc, body: body, documentURI: "https://example.com/articles/page", options: defaultOpts(), nodeState: make(map[*html.Node]*nodeData)}
+	r.fixRelativeUris(article)
+
+	if links := r.getAllNodesWithTag(article, "a"); len(links) != 0 {
+		t.Errorf("remaining links = %d, want 0", len(links))
+	}
+	images := r.getAllNodesWithTag(article, "img")
+	if len(images) != 1 {
+		t.Fatalf("images = %d, want 1", len(images))
+	}
+	if got, want := getAttribute(images[0], "src"), "https://example.com/articles/images/article.jpg"; got != want {
+		t.Errorf("image src = %q, want %q", got, want)
+	}
+}
+
 func TestFixRelativeUrisWhitespaceOnlyAttributes(t *testing.T) {
 	doc := &html.Node{Type: html.DocumentNode}
 	body := newElement("body")

@@ -390,6 +390,31 @@ func preservedClassName(s string, preserve func(string) bool) string {
 	return b.String()
 }
 
+// isJavaScriptURI recognizes the only scheme fixRelativeUris treats
+// specially, without allocating or invoking net/url for every link.
+func isJavaScriptURI(uri string) bool {
+	uri = strings.TrimSpace(uri)
+	const scheme = "javascript"
+	matched := 0
+	for i := 0; i < len(uri); i++ {
+		c := uri[i]
+		if c == '\t' || c == '\n' || c == '\r' {
+			continue
+		}
+		if matched == len(scheme) {
+			return c == ':'
+		}
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		if c != scheme[matched] {
+			return false
+		}
+		matched++
+	}
+	return false
+}
+
 // Converts each <a> and <img> uri in the given element to an absolute URI,
 // ignoring #ref URIs.
 func (r *engine) fixRelativeUris(articleContent *html.Node) {
@@ -418,16 +443,19 @@ func (r *engine) fixRelativeUris(articleContent *html.Node) {
 			return uri
 		}
 		u := base.ResolveReference(ref)
-		var abs string
+		// Build the result once. Repeated string concatenation made one allocation
+		// for nearly every URL component, which is costly on link-heavy pages.
+		var abs strings.Builder
+		abs.Grow(len(baseURI) + len(uri) + 8)
 		if u.Scheme != "" {
-			abs += u.Scheme
+			abs.WriteString(u.Scheme)
 			if strings.HasPrefix(u.Scheme, "http") {
-				abs += "://"
+				abs.WriteString("://")
 			} else {
-				abs += ":"
+				abs.WriteByte(':')
 			}
 		}
-		abs += strings.ToLower(u.Host)
+		abs.WriteString(strings.ToLower(u.Host))
 
 		var b, a string
 		if strings.Contains(uri, "?") {
@@ -447,67 +475,44 @@ func (r *engine) fixRelativeUris(articleContent *html.Node) {
 				if strings.HasPrefix(uri, "//") {
 					p = doubleForwardSlashes.ReplaceAllString(b, "")
 				} else {
-					p = strings.ReplaceAll(b, abs, "")
+					p = strings.ReplaceAll(b, abs.String(), "")
 				}
 			}
-			abs += strings.ReplaceAll(p, "/C|/", "/C:/")
+			abs.WriteString(strings.ReplaceAll(p, "/C|/", "/C:/"))
 		} else if u.Opaque != "" {
-			abs += u.Opaque
+			abs.WriteString(u.Opaque)
 		} else {
-			abs += "/"
+			abs.WriteByte('/')
 		}
 		if u.RawQuery != "" {
-			abs += "?" + u.RawQuery
+			abs.WriteByte('?')
+			abs.WriteString(u.RawQuery)
 		}
 		if u.Fragment != "" {
+			abs.WriteByte('#')
 			if strings.Contains(a, "%") {
-				abs += "#" + a
+				abs.WriteString(a)
 			} else {
-				abs += "#" + u.Fragment
+				abs.WriteString(u.Fragment)
 			}
 		}
-		if strings.HasSuffix(uri, "#") && !strings.HasSuffix(abs, "#") {
-			abs += "#"
+		if strings.HasSuffix(uri, "#") && (abs.Len() == 0 || abs.String()[abs.Len()-1] != '#') {
+			abs.WriteByte('#')
 		}
-		if strings.HasSuffix(uri, "?") && !strings.HasSuffix(abs, "?") {
-			abs += "?"
+		if strings.HasSuffix(uri, "?") && (abs.Len() == 0 || abs.String()[abs.Len()-1] != '?') {
+			abs.WriteByte('?')
 		}
-		return abs
+		return abs.String()
 	}
 
-	parseScheme := func(uri string) string {
-		parsed, err := url.Parse(uri)
-		if err == nil {
-			return parsed.Scheme
-		}
-		// A malformed escape elsewhere in the URI must not hide a valid scheme.
-		if colon := strings.IndexByte(uri, ':'); colon >= 0 {
-			if parsed, err = url.Parse(uri[:colon+1]); err == nil {
-				return parsed.Scheme
-			}
-		}
-		return ""
-	}
-
-	var links = r.getAllNodesWithTag(articleContent, "a")
-	for _, link := range links {
+	processLink := func(link *html.Node) {
 		var href = getAttribute(link, "href")
 		if href != "" {
-			// Browsers remove ASCII tabs and newlines from URLs before parsing,
-			// including when they occur inside a scheme. Apply the same preprocessing
-			// before checking the case-insensitive scheme.
-			normalizedHref := strings.Map(func(r rune) rune {
-				switch r {
-				case '\t', '\n', '\r':
-					return -1
-				default:
-					return r
-				}
-			}, strings.TrimSpace(href))
-
-			// Remove links with javascript: URIs, since
-			// they won't work after scripts have been removed from the page.
-			if strings.EqualFold(parseScheme(normalizedHref), "javascript") {
+			// Remove links with javascript: URIs, since they won't work after
+			// scripts have been removed from the page. Browsers ignore ASCII tabs
+			// and newlines in schemes; inspect that short prefix directly rather
+			// than normalizing and parsing every href into another URL.
+			if isJavaScriptURI(href) {
 				// if the link only contains simple text content, it can be converted to a text node
 				if link.FirstChild != nil && link.FirstChild == link.LastChild && link.FirstChild.Type == html.TextNode {
 					var text = &html.Node{Type: html.TextNode, Data: link.FirstChild.Data}
@@ -534,11 +539,7 @@ func (r *engine) fixRelativeUris(articleContent *html.Node) {
 		}
 	}
 
-	var medias = r.getAllNodesWithTag(articleContent,
-		"img", "picture", "figure", "video", "audio", "source",
-	)
-
-	for _, media := range medias {
+	processMedia := func(media *html.Node) {
 		var src = getAttribute(media, "src")
 		if src != "" {
 			setAttribute(media, "src", toAbsoluteURI(src))
@@ -560,6 +561,31 @@ func (r *engine) fixRelativeUris(articleContent *html.Node) {
 				setAttribute(media, "srcset", strings.Join(newSrcset, " "))
 			}
 		}
+	}
+
+	// Links and media often number in the thousands. Process both in one walk
+	// instead of allocating two slices containing every matching node. Defer
+	// removal of javascript links: replacement reparents their children, which
+	// would otherwise prevent this walk from reaching nested media.
+	var javascriptLinks []*html.Node
+	walkNodes(articleContent, func(n *html.Node) bool {
+		if n.Type != html.ElementNode {
+			return false
+		}
+		switch n.Data {
+		case "a":
+			if isJavaScriptURI(getAttribute(n, "href")) {
+				javascriptLinks = append(javascriptLinks, n)
+			} else {
+				processLink(n)
+			}
+		case "img", "picture", "figure", "video", "audio", "source":
+			processMedia(n)
+		}
+		return false
+	})
+	for _, link := range javascriptLinks {
+		processLink(link)
 	}
 }
 
