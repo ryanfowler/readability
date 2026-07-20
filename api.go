@@ -284,47 +284,31 @@ func parseNode(root *html.Node, pageURL string, options *Options, restore func()
 			return nil, &TooManyElementsError{Count: count, Max: o.MaxElemsToParse}
 		}
 	}
-	configure := func(x *engineOptions) {
-		x.maxElemsToParse = o.MaxElemsToParse
-		x.nbTopCandidates = o.NbTopCandidates
-		x.charThreshold = o.CharThreshold
-		x.classesToPreserve = append([]string(nil), o.ClassesToPreserve...)
-		x.keepClasses = o.KeepClasses
-		x.disableJSONLD = o.DisableJSONLD
-		x.linkDensityModifier = o.LinkDensityModifier
-		x.logger = o.Logger
-		x.debug = o.Debug
-		if o.AllowedVideoRegex != nil {
-			x.allowedVideoRegex = o.AllowedVideoRegex
-		}
+	extractOptions := extractionOptions{
+		nbTopCandidates:     o.NbTopCandidates,
+		charThreshold:       o.CharThreshold,
+		classesToPreserve:   append([]string(nil), o.ClassesToPreserve...),
+		keepClasses:         o.KeepClasses,
+		disableJSONLD:       o.DisableJSONLD,
+		allowedVideoRegex:   o.AllowedVideoRegex,
+		linkDensityModifier: o.LinkDensityModifier,
+		logger:              o.Logger,
+		debug:               o.Debug,
 	}
-	var e *engine
-	var err error
+	if extractOptions.allowedVideoRegex == nil {
+		extractOptions.allowedVideoRegex = videos
+	}
+	var x *extractor
 	if restore == nil {
-		e, err = newEngineFromReadOnlyNode(root, pageURL, configure)
+		x = newExtractorFromReadOnlyNode(root, pageURL, extractOptions)
 	} else {
-		e, err = newEngineFromOwnedNode(root, restore, pageURL, configure)
+		x = newExtractorFromOwnedNode(root, restore, pageURL, extractOptions)
 	}
+	article, err := x.extract()
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrNoContent, err)
 	}
-	r, err := e.Parse()
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrNoContent, err)
-	}
-	return &Article{
-		Title:         r.Title,
-		Byline:        r.Byline,
-		Dir:           r.Dir,
-		Lang:          r.Lang,
-		Content:       r.HTMLContent,
-		Node:          r.Node,
-		TextContent:   r.TextContent,
-		Length:        r.Length,
-		Excerpt:       r.Excerpt,
-		SiteName:      r.SiteName,
-		PublishedTime: r.PublishedTime,
-	}, nil
+	return article, nil
 }
 
 // IsProbablyReaderable reports whether input is likely to contain an article.
@@ -353,5 +337,5 @@ func IsProbablyReaderableNode(root *html.Node, options *ReaderableOptions) bool 
 	if options != nil {
 		o = *options
 	}
-	return isProbablyReaderable(root, func(x *engineOptions) { x.minScore = o.MinScore; x.minContentLength = o.MinContentLength })
+	return isProbablyReaderable(root, o.MinScore, o.MinContentLength)
 }

@@ -42,7 +42,7 @@ func TestJSONLDContextVocabOverride(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := (&engine{}).getJSONLD(doc); got != nil {
+	if got := (&extractor{}).getJSONLD(doc); got != nil {
 		t.Errorf("getJSONLD returned metadata for an overridden Schema.org vocabulary: %+v", got)
 	}
 
@@ -74,7 +74,7 @@ func TestJSONLDArrayFormsAndGraphContainerType(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := (&engine{}).getJSONLD(doc)
+	got := (&extractor{}).getJSONLD(doc)
 	if got == nil {
 		t.Fatal("getJSONLD returned nil")
 	}

@@ -41,8 +41,6 @@ const (
 	flagWeightClasses      = 0x2
 	flagCleanConditionally = 0x4
 
-	// Max number of nodes supported by this parser. Default: 0 (no limit)
-	defaultMaxElemsToParse = 0
 	// The number of top candidates to consider when analysing how
 	// tight the competition is among candidates.
 	defaultNTopCandidates = 5
@@ -84,13 +82,12 @@ type nodeData struct {
 	isDataTable  bool
 }
 
-type engine struct {
-	options  *engineOptions
-	flags    int
-	original *html.Node
-	// restoreDocument reparses the source for extraction retries. Parse supplies
-	// it so the initial parser-produced tree can be mutated without cloning.
-	restoreDocument func() *html.Node
+type extractor struct {
+	options extractionOptions
+	flags   int
+	// resetDocument returns a fresh working tree for extraction retries. Parse
+	// reparses its input; ParseNode clones the caller's immutable tree.
+	resetDocument   func() *html.Node
 	doc             *html.Node
 	body            *html.Node
 	documentElement *html.Node
@@ -102,7 +99,7 @@ type engine struct {
 	articleDir      string
 	articleSiteName string
 	articleLang     string
-	attempts        []*attempt
+	attempts        []attempt
 }
 
 type attempt struct {
@@ -110,45 +107,27 @@ type attempt struct {
 	textLength     int
 }
 
-// newEngineFromReadOnlyNode uses doc as the immutable retry snapshot and
+// newExtractorFromReadOnlyNode uses doc as the immutable retry snapshot and
 // mutates only an internal clone. Callers must not mutate doc while parsing.
-func newEngineFromReadOnlyNode(doc *html.Node, uri string, opts ...engineOption) (*engine, error) {
-	if doc == nil {
-		return nil, fmt.Errorf("first argument to engine constructor should be a HTML document")
-	}
-	return newEngineWithOriginal(cloneTree(doc), doc, uri, opts...)
+func newExtractorFromReadOnlyNode(doc *html.Node, uri string, options extractionOptions) *extractor {
+	return newExtractor(cloneTree(doc), func() *html.Node { return cloneTree(doc) }, uri, options)
 }
 
-// newEngineFromOwnedNode may mutate doc and reparses the source on retries.
-func newEngineFromOwnedNode(doc *html.Node, restore func() *html.Node, uri string, opts ...engineOption) (*engine, error) {
-	if doc == nil {
-		return nil, fmt.Errorf("first argument to engine constructor should be a HTML document")
-	}
-	r, err := newEngineWithOriginal(doc, nil, uri, opts...)
-	if err == nil {
-		r.restoreDocument = restore
-	}
-	return r, err
+// newExtractorFromOwnedNode may mutate doc and reparses the source on retries.
+func newExtractorFromOwnedNode(doc *html.Node, reset func() *html.Node, uri string, options extractionOptions) *extractor {
+	return newExtractor(doc, reset, uri, options)
 }
 
-func newEngineWithOriginal(doc, original *html.Node, uri string, opts ...engineOption) (*engine, error) {
-	r := &engine{
-		options:     defaultOpts(),
-		original:    original,
-		doc:         doc,
-		documentURI: uri,
-		nodeState:   make(map[*html.Node]*nodeData),
-	}
-
-	// Configurable options
-	for _, opt := range opts {
-		opt(r.options)
+func newExtractor(doc *html.Node, reset func() *html.Node, uri string, options extractionOptions) *extractor {
+	r := &extractor{
+		options:       options,
+		resetDocument: reset,
+		doc:           doc,
+		documentURI:   uri,
+		nodeState:     make(map[*html.Node]*nodeData),
 	}
 
 	r.body = findElement(r.doc, "body")
-	if r.body == nil {
-		return nil, fmt.Errorf("cannot parse doc")
-	}
 	r.documentElement = findElement(r.doc, "html")
 	if r.documentElement == nil {
 		// ParseNode also accepts a body-rooted tree. Start extraction at the body
@@ -159,10 +138,10 @@ func newEngineWithOriginal(doc, original *html.Node, uri string, opts ...engineO
 	// Start with all flags set
 	r.flags = flagStripUnlikelys | flagWeightClasses | flagCleanConditionally
 
-	return r, nil
+	return r
 }
 
-func (r *engine) data(n *html.Node) *nodeData {
+func (r *extractor) data(n *html.Node) *nodeData {
 	d := r.nodeState[n]
 	if d == nil {
 		d = &nodeData{}
@@ -171,19 +150,19 @@ func (r *engine) data(n *html.Node) *nodeData {
 	return d
 }
 
-func (r *engine) logDebug(msg string, args ...any) {
+func (r *extractor) logDebug(msg string, args ...any) {
 	if r.options.debug && r.options.logger != nil {
 		r.options.logger.Debug(msg, args...)
 	}
 }
 
-func (r *engine) logError(msg string, args ...any) {
+func (r *extractor) logError(msg string, args ...any) {
 	if r.options.logger != nil {
 		r.options.logger.Error(msg, args...)
 	}
 }
 
-func (r *engine) getBaseURI() string {
+func (r *extractor) getBaseURI() string {
 	if r.baseURI != "" {
 		return r.baseURI
 	}
@@ -202,34 +181,9 @@ func (r *engine) getBaseURI() string {
 	return r.baseURI
 }
 
-type engineResult struct {
-	// article title
-	Title string
-	// extracted article node
-	Node *html.Node
-	// HTML string of processed article HTMLContent
-	HTMLContent string
-	// text content of the article, with all the HTML tags removed
-	TextContent string
-	// length of an article, in UTF-16 code units
-	Length int
-	// article description, or short excerpt from the content
-	Excerpt string
-	// author metadata
-	Byline string
-	// content direction
-	Dir string
-	// name of the site
-	SiteName string
-	// content language
-	Lang string
-	// published time
-	PublishedTime string
-}
-
 // Run any post-process modifications to article content as necessary.
-func (r *engine) postProcessContent(articleContent *html.Node) {
-	// engine cannot open relative uris so we convert them to absolute uris.
+func (r *extractor) postProcessContent(articleContent *html.Node) {
+	// extractor cannot open relative uris so we convert them to absolute uris.
 	r.fixRelativeUris(articleContent)
 
 	r.simplifyNestedElements(articleContent)
@@ -243,7 +197,7 @@ func (r *engine) postProcessContent(articleContent *html.Node) {
 // Iterates over a NodeList, calls `filterFn` for each node and removes node
 // if function returned `true`.
 // If function is not passed, removes all the nodes in node list.
-func (r *engine) removeNodes(nodeList []*html.Node, filterFn func(n *html.Node) bool) {
+func (r *extractor) removeNodes(nodeList []*html.Node, filterFn func(n *html.Node) bool) {
 	for i := len(nodeList) - 1; i >= 0; i-- {
 		node := nodeList[i]
 		parentNode := node.Parent
@@ -258,7 +212,7 @@ func (r *engine) removeNodes(nodeList []*html.Node, filterFn func(n *html.Node) 
 }
 
 // Iterates over a NodeList, and calls setNodeTag for each node.
-func (r *engine) replaceNodeTags(nodeList []*html.Node, newtagName string) {
+func (r *extractor) replaceNodeTags(nodeList []*html.Node, newtagName string) {
 	for _, node := range nodeList {
 		r.setNodeTag(node, newtagName)
 	}
@@ -266,7 +220,7 @@ func (r *engine) replaceNodeTags(nodeList []*html.Node, newtagName string) {
 
 // Iterate over a NodeList, return true if any of the provided iterate
 // function calls returns true, false otherwise.
-func (r *engine) someNode(nodeList []*html.Node, fn func(n *html.Node) bool) bool {
+func someNode(nodeList []*html.Node, fn func(n *html.Node) bool) bool {
 	for _, node := range nodeList {
 		if fn(node) {
 			return true
@@ -276,7 +230,7 @@ func (r *engine) someNode(nodeList []*html.Node, fn func(n *html.Node) bool) boo
 }
 
 // Concat all nodelists passed as arguments.
-func (r *engine) concatNodeLists(nodeLists ...[]*html.Node) []*html.Node {
+func concatNodeLists(nodeLists ...[]*html.Node) []*html.Node {
 	ret := make([]*html.Node, 0)
 	for _, list := range nodeLists {
 		ret = append(ret, list...)
@@ -284,7 +238,7 @@ func (r *engine) concatNodeLists(nodeLists ...[]*html.Node) []*html.Node {
 	return ret
 }
 
-func (r *engine) getAllNodesWithTag(n *html.Node, tagNames ...string) []*html.Node {
+func getAllNodesWithTag(n *html.Node, tagNames ...string) []*html.Node {
 	if len(tagNames) == 0 {
 		return nil
 	}
@@ -321,7 +275,7 @@ func (r *engine) getAllNodesWithTag(n *html.Node, tagNames ...string) []*html.No
 // Removes the class="" attribute from every element in the given
 // subtree, except those that match CLASSES_TO_PRESERVE and
 // the classesToPreserve array from the options object.
-func (r *engine) cleanClasses(n *html.Node) {
+func (r *extractor) cleanClasses(n *html.Node) {
 	className := getAttribute(n, "class")
 	if className != "" {
 		className = preservedClassName(className, r.preserve)
@@ -338,7 +292,7 @@ func (r *engine) cleanClasses(n *html.Node) {
 	}
 }
 
-func (r *engine) preserve(s string) bool {
+func (r *extractor) preserve(s string) bool {
 	return slices.Contains(r.options.classesToPreserve, s)
 }
 
@@ -395,7 +349,7 @@ func isJavaScriptURI(uri string) bool {
 
 // Converts each <a> and <img> uri in the given element to an absolute URI,
 // ignoring #ref URIs.
-func (r *engine) fixRelativeUris(articleContent *html.Node) {
+func (r *extractor) fixRelativeUris(articleContent *html.Node) {
 	baseURI := r.getBaseURI()
 	documentURI := r.documentURI
 
@@ -514,14 +468,14 @@ func (r *engine) fixRelativeUris(articleContent *html.Node) {
 	}
 }
 
-func (r *engine) simplifyNestedElements(articleContent *html.Node) {
+func (r *extractor) simplifyNestedElements(articleContent *html.Node) {
 	var node = articleContent
 	for node != nil {
 		if node.Parent != nil && slices.Contains([]string{"DIV", "SECTION"}, tagName(node)) && !strings.HasPrefix(nodeID(node), "readability") {
-			if r.isElementWithoutContent(node) {
+			if isElementWithoutContent(node) {
 				node = r.removeAndGetNext(node)
 				continue
-			} else if r.hasSingleTagInsideElement(node, "DIV") || r.hasSingleTagInsideElement(node, "SECTION") {
+			} else if hasSingleTagInsideElement(node, "DIV") || hasSingleTagInsideElement(node, "SECTION") {
 				child, _ := singleElementChild(node)
 				for _, a := range node.Attr {
 					setAttribute(child, a.Key, a.Val)
@@ -536,7 +490,7 @@ func (r *engine) simplifyNestedElements(articleContent *html.Node) {
 }
 
 // Get the article title as an H1.
-func (r *engine) getArticleTitle() string {
+func (r *extractor) getArticleTitle() string {
 	var doc = r.doc
 	var curTitle string
 	var origTitle = curTitle
@@ -545,7 +499,7 @@ func (r *engine) getArticleTitle() string {
 	if curTitle == "" {
 		titles := elementsByTagName(doc, "title")
 		if len(titles) != 0 {
-			curTitle = r.getInnerText(elementsByTagName(doc, "title")[0], true)
+			curTitle = getInnerText(elementsByTagName(doc, "title")[0], true)
 			origTitle = curTitle
 		}
 	}
@@ -570,12 +524,12 @@ func (r *engine) getArticleTitle() string {
 	} else if strings.Contains(curTitle, ": ") {
 		// Check if we have an heading containing this exact string, so we
 		// could assume it's the full title.
-		var headings = r.concatNodeLists(
+		var headings = concatNodeLists(
 			elementsByTagName(doc, "h1"),
 			elementsByTagName(doc, "h2"),
 		)
 		var trimmedTitle = strings.TrimSpace(curTitle)
-		var match = r.someNode(headings, func(heading *html.Node) bool {
+		var match = someNode(headings, func(heading *html.Node) bool {
 			return strings.TrimSpace(textContent(heading)) == trimmedTitle
 		})
 
@@ -595,7 +549,7 @@ func (r *engine) getArticleTitle() string {
 	} else if characterCount(curTitle) > 150 || characterCount(curTitle) < 15 {
 		var hOnes = elementsByTagName(doc, "h1")
 		if len(hOnes) == 1 {
-			curTitle = r.getInnerText(hOnes[0], true)
+			curTitle = getInnerText(hOnes[0], true)
 		}
 	}
 
@@ -614,22 +568,22 @@ func (r *engine) getArticleTitle() string {
 
 // Prepare the HTML document for readability to scrape it.
 // This includes things like stripping javascript, CSS, and handling terrible markup.
-func (r *engine) prepDocument() {
+func (r *extractor) prepDocument() {
 	var doc = r.doc
 	// Remove all style tags in head
-	r.removeNodes(r.getAllNodesWithTag(doc, "style"), nil)
+	r.removeNodes(getAllNodesWithTag(doc, "style"), nil)
 
 	if r.body != nil {
 		r.replaceBrs(r.body)
 	}
 
-	r.replaceNodeTags(r.getAllNodesWithTag(doc, "font"), "SPAN")
+	r.replaceNodeTags(getAllNodesWithTag(doc, "font"), "SPAN")
 }
 
 // Finds the next node, starting from the given node, and ignoring
 // whitespace in between. If the given node is an element, the same node is
 // returned.
-func (r *engine) nextNode(n *html.Node) *html.Node {
+func (r *extractor) nextNode(n *html.Node) *html.Node {
 	var next = n
 	for next != nil &&
 		next.Type != html.ElementNode &&
@@ -647,9 +601,9 @@ func (r *engine) nextNode(n *html.Node) *html.Node {
 // will become:
 //
 //	<div>foo<br>bar<p>abc</p></div>
-func (r *engine) replaceBrs(n *html.Node) {
+func (r *extractor) replaceBrs(n *html.Node) {
 
-	for _, br := range r.getAllNodesWithTag(n, "br") {
+	for _, br := range getAllNodesWithTag(n, "br") {
 		var next = br.NextSibling
 
 		// Whether 2 or more <br> elements have been found and replaced with a
@@ -685,7 +639,7 @@ func (r *engine) replaceBrs(n *html.Node) {
 					}
 				}
 
-				if !r.isPhrasingContent(next) {
+				if !isPhrasingContent(next) {
 					break
 				}
 
@@ -695,7 +649,7 @@ func (r *engine) replaceBrs(n *html.Node) {
 				next = sibling
 			}
 
-			for lastChild(p) != nil && r.isWhitespace(lastChild(p)) {
+			for lastChild(p) != nil && isWhitespace(lastChild(p)) {
 				if _, err := removeChild(p, lastChild(p)); err != nil {
 					r.logError("cannot remove child", "err", err)
 				}
@@ -708,7 +662,7 @@ func (r *engine) replaceBrs(n *html.Node) {
 	}
 }
 
-func (r *engine) setNodeTag(n *html.Node, tag string) *html.Node {
+func (r *extractor) setNodeTag(n *html.Node, tag string) *html.Node {
 	r.logDebug("setNodeTag", "node", n, "tag", tag)
 	tag = strings.ToLower(tag)
 	n.Data = tag
@@ -719,7 +673,7 @@ func (r *engine) setNodeTag(n *html.Node, tag string) *html.Node {
 
 // Prepare the article node for display. Clean out any inline styles,
 // iframes, forms, strip extraneous <p> tags, etc.
-func (r *engine) prepArticle(articleContent *html.Node) {
+func (r *extractor) prepArticle(articleContent *html.Node) {
 	r.cleanStyles(articleContent)
 
 	// Check for data tables before we continue, to avoid removing items in
@@ -764,10 +718,10 @@ func (r *engine) prepArticle(articleContent *html.Node) {
 	r.cleanConditionally(articleContent, "div")
 
 	// replace H1 with H2 as H1 should be only title that is displayed separately
-	r.replaceNodeTags(r.getAllNodesWithTag(articleContent, "h1"), "h2")
+	r.replaceNodeTags(getAllNodesWithTag(articleContent, "h1"), "h2")
 
 	// Remove extra paragraphs
-	r.removeNodes(r.getAllNodesWithTag(articleContent, "p"), func(paragraph *html.Node) bool {
+	r.removeNodes(getAllNodesWithTag(articleContent, "p"), func(paragraph *html.Node) bool {
 		mediaCount := 0
 		walkNodes(paragraph, func(n *html.Node) bool {
 			if n != paragraph && n.Type == html.ElementNode {
@@ -778,10 +732,10 @@ func (r *engine) prepArticle(articleContent *html.Node) {
 			}
 			return false
 		})
-		return mediaCount == 0 && r.getInnerText(paragraph, false) == ""
+		return mediaCount == 0 && getInnerText(paragraph, false) == ""
 	})
 
-	for _, br := range r.getAllNodesWithTag(articleContent, "br") {
+	for _, br := range getAllNodesWithTag(articleContent, "br") {
 		var next = r.nextNode(br.NextSibling)
 		if next != nil && tagName(next) == "P" {
 			if _, err := removeChild(br.Parent, br); err != nil {
@@ -791,19 +745,19 @@ func (r *engine) prepArticle(articleContent *html.Node) {
 	}
 
 	// Remove single-cell tables
-	for _, table := range r.getAllNodesWithTag(articleContent, "table") {
+	for _, table := range getAllNodesWithTag(articleContent, "table") {
 		var tbody *html.Node = table
-		if r.hasSingleTagInsideElement(table, "TBODY") {
+		if hasSingleTagInsideElement(table, "TBODY") {
 			tbody = firstElementChild(table)
 		}
-		if r.hasSingleTagInsideElement(tbody, "TR") {
+		if hasSingleTagInsideElement(tbody, "TR") {
 			var row = firstElementChild(tbody)
-			if r.hasSingleTagInsideElement(row, "TD") {
+			if hasSingleTagInsideElement(row, "TD") {
 				var cell = firstElementChild(row)
 				var tag = "DIV"
 				allPhrasing := true
 				for child := cell.FirstChild; child != nil; child = child.NextSibling {
-					if !r.isPhrasingContent(child) {
+					if !isPhrasingContent(child) {
 						allPhrasing = false
 						break
 					}
@@ -820,7 +774,7 @@ func (r *engine) prepArticle(articleContent *html.Node) {
 
 // Initialize a node with the readability object. Also checks the
 // className/id for special names to add to its score.
-func (r *engine) initializeNode(n *html.Node) {
+func (r *extractor) initializeNode(n *html.Node) {
 
 	r.data(n).contentScore = 0
 
@@ -841,7 +795,7 @@ func (r *engine) initializeNode(n *html.Node) {
 	r.data(n).contentScore += r.getClassWeight(n)
 }
 
-func (r *engine) removeAndGetNext(n *html.Node) *html.Node {
+func (r *extractor) removeAndGetNext(n *html.Node) *html.Node {
 	var nextNode = r.getNextNode(n, true)
 	if _, err := removeChild(n.Parent, n); err != nil {
 		r.logError("cannot remove child", "err", err)
@@ -853,7 +807,7 @@ func (r *engine) removeAndGetNext(n *html.Node) *html.Node {
 // Pass true for the second parameter to indicate this node itself
 // (and its kids) are going away, and we want the next node over.
 // Calling this in a loop will traverse the DOM depth-first.
-func (r *engine) getNextNode(n *html.Node, ignoreSelfAndKids bool) *html.Node {
+func (r *extractor) getNextNode(n *html.Node, ignoreSelfAndKids bool) *html.Node {
 	// First check for kids if those aren't being ignored
 	if !ignoreSelfAndKids && firstElementChild(n) != nil {
 		return firstElementChild(n)
@@ -879,7 +833,7 @@ func (r *engine) getNextNode(n *html.Node, ignoreSelfAndKids bool) *html.Node {
 // 1 = same text, 0 = completely different text.
 // Works the way that it splits both texts into words and then finds words that are unique in second text
 // the result is given by the lower length of unique parts.
-func (r *engine) textSimilarity(textA, textB string) float64 {
+func textSimilarity(textA, textB string) float64 {
 	var tokensA = tokenize.Split(strings.ToLower(textA), -1)
 	var tokensB = tokenize.Split(strings.ToLower(textB), -1)
 	if len(tokensA) == 0 || len(tokensB) == 0 {
@@ -901,7 +855,7 @@ func (r *engine) textSimilarity(textA, textB string) float64 {
 	return 1 - float64(uniqueLength)/float64(totalLength)
 }
 
-func (r *engine) checkByline(n *html.Node, class, id string) bool {
+func (r *extractor) checkByline(n *html.Node, class, id string) bool {
 	if r.articleByline != "" {
 		return false
 	}
@@ -909,7 +863,7 @@ func (r *engine) checkByline(n *html.Node, class, id string) bool {
 	var rel = getAttribute(n, "rel")
 	var itemprop = getAttribute(n, "itemprop")
 
-	if (rel == "author" || strings.Contains(itemprop, "author") || matchesByline(class) || matchesByline(id)) && r.isValidByline(textContent(n)) {
+	if (rel == "author" || strings.Contains(itemprop, "author") || matchesByline(class) || matchesByline(id)) && isValidByline(textContent(n)) {
 		bylineNode := n
 		for _, child := range elementsByTagName(n, "*") {
 			if getAttribute(child, "itemprop") == "name" {
@@ -924,7 +878,7 @@ func (r *engine) checkByline(n *html.Node, class, id string) bool {
 	return false
 }
 
-func (r *engine) getNodeAncestors(n *html.Node, maxDepth int) []*html.Node {
+func getNodeAncestors(n *html.Node, maxDepth int) []*html.Node {
 	var i, ancestors = 0, []*html.Node{}
 	for n.Parent != nil {
 		ancestors = append(ancestors, n.Parent)
@@ -938,7 +892,7 @@ func (r *engine) getNodeAncestors(n *html.Node, maxDepth int) []*html.Node {
 
 // Using a variety of metrics (content score, classname, element types), find the content that is
 // most likely to be the stuff a user wants to read. Then return it wrapped up in a div.
-func (r *engine) grabArticle(page *html.Node) *html.Node {
+func (r *extractor) grabArticle(page *html.Node) *html.Node {
 
 	r.logDebug("**** grabArticle ****")
 	var isPaging bool
@@ -1014,8 +968,8 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 			if stripUnlikelyCandidates {
 				if (matchesUnlikelyCandidate(class) || matchesUnlikelyCandidate(id)) &&
 					!matchesMaybeCandidate(class) && !matchesMaybeCandidate(id) &&
-					!r.hasAncestorTag(n, "table", 3, nil) &&
-					!r.hasAncestorTag(n, "code", 3, nil) &&
+					!hasAncestorTagWithFilter(n, "table", 3, nil) &&
+					!hasAncestorTagWithFilter(n, "code", 3, nil) &&
 					tagName(n) != "BODY" &&
 					tagName(n) != "A" {
 					r.logDebug("Removing unlikely candidate", "class", class, "id", id)
@@ -1034,7 +988,7 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 			if (tagName(n) == "DIV" || tagName(n) == "SECTION" || tagName(n) == "HEADER" ||
 				tagName(n) == "H1" || tagName(n) == "H2" || tagName(n) == "H3" ||
 				tagName(n) == "H4" || tagName(n) == "H5" || tagName(n) == "H6") &&
-				r.isElementWithoutContent(n) {
+				isElementWithoutContent(n) {
 				n = r.removeAndGetNext(n)
 				continue
 			}
@@ -1050,16 +1004,16 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 				var childNode = firstChild(n)
 				for childNode != nil {
 					var nextSibling = childNode.NextSibling
-					if r.isPhrasingContent(childNode) {
+					if isPhrasingContent(childNode) {
 						if p != nil {
 							appendChild(p, childNode)
-						} else if !r.isWhitespace(childNode) {
+						} else if !isWhitespace(childNode) {
 							p = newElement("p")
 							replaceChild(n, p, childNode)
 							appendChild(p, childNode)
 						}
 					} else if p != nil {
-						for lastChild(p) != nil && r.isWhitespace(lastChild(p)) {
+						for lastChild(p) != nil && isWhitespace(lastChild(p)) {
 							if _, err := removeChild(p, lastChild(p)); err != nil {
 								r.logError("cannot remove child", "err", err)
 							}
@@ -1073,12 +1027,12 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 				// element. DIVs with only a P element inside and no text content can be
 				// safely converted into plain P elements to avoid confusing the scoring
 				// algorithm with DIVs with are, in practice, paragraphs.
-				if r.hasSingleTagInsideElement(n, "P") && r.getLinkDensity(n) < 0.25 {
+				if hasSingleTagInsideElement(n, "P") && r.getLinkDensity(n) < 0.25 {
 					newNode, _ := singleElementChild(n)
 					replaceChild(n.Parent, newNode, n)
 					n = newNode
 					elementsToScore = append(elementsToScore, n)
-				} else if !r.hasChildBlockElement(n) {
+				} else if !hasChildBlockElement(n) {
 					n = r.setNodeTag(n, "P")
 					elementsToScore = append(elementsToScore, n)
 				}
@@ -1097,13 +1051,13 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 			}
 
 			// If this paragraph is less than 25 characters, don't even count it.
-			var innerText = r.getInnerText(elementToScore, true)
+			var innerText = getInnerText(elementToScore, true)
 			if characterCount(innerText) < 25 {
 				continue
 			}
 
 			// Exclude nodes with no ancestor.
-			var ancestors = r.getNodeAncestors(elementToScore, 5)
+			var ancestors = getNodeAncestors(elementToScore, 5)
 			if len(ancestors) == 0 {
 				continue
 			}
@@ -1211,7 +1165,7 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 			var alternativeCandidateAncestors [][]*html.Node
 			for i := 1; i < len(topCandidates); i++ {
 				if r.data(topCandidates[i]).contentScore/r.data(topCandidate).contentScore >= 0.75 {
-					alternativeCandidateAncestors = append(alternativeCandidateAncestors, r.getNodeAncestors(topCandidates[i], 0))
+					alternativeCandidateAncestors = append(alternativeCandidateAncestors, getNodeAncestors(topCandidates[i], 0))
 				}
 			}
 			var MINIMUM_TOPCANDIDATES = 3
@@ -1315,7 +1269,7 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 					append = true
 				} else if nodeName(sibling) == "P" {
 					var linkDensity = r.getLinkDensity(sibling)
-					var nodeContent = r.getInnerText(sibling, true)
+					var nodeContent = getInnerText(sibling, true)
 					var nodeLength = characterCount(nodeContent)
 
 					if nodeLength > 80 && linkDensity < 0.25 {
@@ -1383,29 +1337,29 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 		// grabArticle with different flags set. This gives us a higher likelihood of
 		// finding the content, and the sieve approach gives us a higher likelihood of
 		// finding the -right- content.
-		var textLength = characterCount(r.getInnerText(articleContent, true))
+		var textLength = characterCount(getInnerText(articleContent, true))
 		if textLength < r.options.charThreshold {
 			parseSuccessful = false
 
 			if r.flagIsActive(flagStripUnlikelys) {
 				r.removeFlag(flagStripUnlikelys)
-				r.attempts = append(r.attempts, &attempt{articleContent: articleContent, textLength: textLength})
+				r.attempts = append(r.attempts, attempt{articleContent: articleContent, textLength: textLength})
 				r.resetDocumentForRetry()
 				page = r.body
 			} else if r.flagIsActive(flagWeightClasses) {
 				r.removeFlag(flagWeightClasses)
-				r.attempts = append(r.attempts, &attempt{articleContent: articleContent, textLength: textLength})
+				r.attempts = append(r.attempts, attempt{articleContent: articleContent, textLength: textLength})
 				r.resetDocumentForRetry()
 				page = r.body
 			} else if r.flagIsActive(flagCleanConditionally) {
 				r.removeFlag(flagCleanConditionally)
-				r.attempts = append(r.attempts, &attempt{articleContent: articleContent, textLength: textLength})
+				r.attempts = append(r.attempts, attempt{articleContent: articleContent, textLength: textLength})
 				r.resetDocumentForRetry()
 				page = r.body
 			} else {
-				r.attempts = append(r.attempts, &attempt{articleContent: articleContent, textLength: textLength})
+				r.attempts = append(r.attempts, attempt{articleContent: articleContent, textLength: textLength})
 				// No luck after removing flags, just return the longest text we found during the different loops
-				slices.SortFunc(r.attempts, func(a, b *attempt) int {
+				slices.SortFunc(r.attempts, func(a, b attempt) int {
 					return b.textLength - a.textLength
 				})
 
@@ -1420,8 +1374,8 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 		if parseSuccessful {
 			// Find out text direction from ancestors of final top candidate.
 			var ancestors = []*html.Node{parentOfTopCandidate, topCandidate}
-			ancestors = append(ancestors, r.getNodeAncestors(parentOfTopCandidate, 0)...)
-			r.someNode(ancestors, func(ancestor *html.Node) bool {
+			ancestors = append(ancestors, getNodeAncestors(parentOfTopCandidate, 0)...)
+			someNode(ancestors, func(ancestor *html.Node) bool {
 				if tagName(ancestor) == "" {
 					return false
 				}
@@ -1440,13 +1394,13 @@ func (r *engine) grabArticle(page *html.Node) *html.Node {
 // Check whether the input string could be a byline.
 // This verifies that the input is a string, and that the length
 // is less than 100 chars.
-func (r *engine) isValidByline(possibleByline string) bool {
+func isValidByline(possibleByline string) bool {
 	bylineLen := characterCount(strings.TrimSpace(possibleByline))
 	return bylineLen > 0 && bylineLen < 100
 }
 
 // Converts HTML entities in string to their corresponding characters.
-func (r *engine) unescapeHtmlEntities(str string) string {
+func unescapeHtmlEntities(str string) string {
 	return decodeHTML(str)
 }
 
@@ -1516,8 +1470,8 @@ func isJSONLDArticleType(value interface{}) bool {
 
 // Try to extract metadata from JSON-LD object.
 // For now, only Schema.org objects of type Article or its subtypes are supported.
-func (r *engine) getJSONLD(doc *html.Node) *metadata {
-	for _, script := range r.getAllNodesWithTag(doc, "script") {
+func (r *extractor) getJSONLD(doc *html.Node) *metadata {
+	for _, script := range getAllNodesWithTag(doc, "script") {
 		if getAttribute(script, "type") != "application/ld+json" {
 			continue
 		}
@@ -1561,7 +1515,7 @@ func (r *engine) getJSONLD(doc *html.Node) *metadata {
 				headline, _ := parsed["headline"].(string)
 				if name != "" && headline != "" && name != headline {
 					title := r.getArticleTitle()
-					if r.textSimilarity(headline, title) > .75 && r.textSimilarity(name, title) <= .75 {
+					if textSimilarity(headline, title) > .75 && textSimilarity(name, title) <= .75 {
 						m.title = strings.TrimSpace(headline)
 					} else {
 						m.title = strings.TrimSpace(name)
@@ -1611,7 +1565,7 @@ func strValue(m map[string]interface{}, key string) string {
 // Accepts as param 'jsonld' an object containing any metadata that
 // could be extracted from a JSON-LD object.
 // Returns an object with optional "excerpt" and "byline" properties.
-func (r *engine) getArticleMetadata(jsonld *metadata) *metadata {
+func (r *extractor) getArticleMetadata(jsonld *metadata) *metadata {
 
 	var meta, values = &metadata{}, make(map[string]string, 0)
 	var metaElements = elementsByTagName(r.doc, "meta")
@@ -1703,18 +1657,18 @@ func (r *engine) getArticleMetadata(jsonld *metadata) *metadata {
 
 	// in many sites the meta value is escaped with HTML entities,
 	// so here we need to unescape it
-	meta.title = r.unescapeHtmlEntities(meta.title)
-	meta.byline = r.unescapeHtmlEntities(meta.byline)
-	meta.excerpt = r.unescapeHtmlEntities(meta.excerpt)
-	meta.siteName = r.unescapeHtmlEntities(meta.siteName)
-	meta.publishedTime = r.unescapeHtmlEntities(meta.publishedTime)
+	meta.title = unescapeHtmlEntities(meta.title)
+	meta.byline = unescapeHtmlEntities(meta.byline)
+	meta.excerpt = unescapeHtmlEntities(meta.excerpt)
+	meta.siteName = unescapeHtmlEntities(meta.siteName)
+	meta.publishedTime = unescapeHtmlEntities(meta.publishedTime)
 
 	return meta
 }
 
 // Check if node is image, or if node contains exactly only one image
 // whether as a direct child or as its descendants.
-func (r *engine) isSingleImage(n *html.Node) bool {
+func (r *extractor) isSingleImage(n *html.Node) bool {
 	if tagName(n) == "IMG" {
 		return true
 	}
@@ -1730,7 +1684,7 @@ func (r *engine) isSingleImage(n *html.Node) bool {
 // <img> element. Replace the first image with the image from inside the <noscript> tag,
 // and remove the <noscript> tag. This improves the quality of the images we use on
 // some sites (e.g. Medium).
-func (r *engine) unwrapNoscriptImages(doc *html.Node) {
+func (r *extractor) unwrapNoscriptImages(doc *html.Node) {
 	// Find img without source or attributes that might contains image, and remove it.
 	// This is done to prevent a placeholder img is replaced by img from noscript in next step.
 	for _, img := range elementsByTagName(doc, "img") {
@@ -1802,14 +1756,14 @@ func (r *engine) unwrapNoscriptImages(doc *html.Node) {
 }
 
 // Removes script tags from the document.
-func (r *engine) removeScripts(doc *html.Node) {
-	r.removeNodes(r.getAllNodesWithTag(doc, "script", "noscript"), nil)
+func (r *extractor) removeScripts(doc *html.Node) {
+	r.removeNodes(getAllNodesWithTag(doc, "script", "noscript"), nil)
 }
 
 // Check if this node has only whitespace and a single element with given tag
 // Returns false if the DIV node contains non-empty text nodes
 // or if it contains no element with given tag or more than 1 element.
-func (r *engine) hasSingleTagInsideElement(element *html.Node, tag string) bool {
+func hasSingleTagInsideElement(element *html.Node, tag string) bool {
 	// There should be exactly 1 element child with given tag.
 	child, ok := singleElementChild(element)
 	if !ok || tagName(child) != tag {
@@ -1825,7 +1779,7 @@ func (r *engine) hasSingleTagInsideElement(element *html.Node, tag string) bool 
 	return true
 }
 
-func (r *engine) isElementWithoutContent(n *html.Node) bool {
+func isElementWithoutContent(n *html.Node) bool {
 	if n.Type != html.ElementNode || hasNonWhitespaceText(n) {
 		return false
 	}
@@ -1868,9 +1822,9 @@ func hasNonWhitespaceText(n *html.Node) bool {
 }
 
 // Determine whether element has any children block level elements.
-func (r *engine) hasChildBlockElement(element *html.Node) bool {
+func hasChildBlockElement(element *html.Node) bool {
 	for n := element.FirstChild; n != nil; n = n.NextSibling {
-		if slices.Contains(divToPElemns, tagName(n)) || r.hasChildBlockElement(n) {
+		if slices.Contains(divToPElemns, tagName(n)) || hasChildBlockElement(n) {
 			return true
 		}
 	}
@@ -1879,13 +1833,13 @@ func (r *engine) hasChildBlockElement(element *html.Node) bool {
 
 // Determine if a node qualifies as phrasing content.
 // see: https://developer.mozilla.org/en-US/docs/Web/Guide/HTML/Content_categories#Phrasing_content
-func (r *engine) isPhrasingContent(n *html.Node) bool {
+func isPhrasingContent(n *html.Node) bool {
 	if n.Type == html.TextNode || slices.Contains(phrasingElems, tagName(n)) {
 		return true
 	}
 	if tag := tagName(n); tag == "A" || tag == "DEL" || tag == "INS" {
 		for child := n.FirstChild; child != nil; child = child.NextSibling {
-			if !r.isPhrasingContent(child) {
+			if !isPhrasingContent(child) {
 				return false
 			}
 		}
@@ -1894,7 +1848,7 @@ func (r *engine) isPhrasingContent(n *html.Node) bool {
 	return false
 }
 
-func (r *engine) isWhitespace(n *html.Node) bool {
+func isWhitespace(n *html.Node) bool {
 	return (n.Type == html.TextNode && len(strings.TrimSpace(n.Data)) == 0) ||
 		(n.Type == html.ElementNode && tagName(n) == "BR")
 }
@@ -1943,7 +1897,7 @@ func isASCIIWhitespace(c byte) bool {
 
 // Get the inner text of a node - cross browser compatibly.
 // This also strips out any excess whitespace to be found ('normalizeSpaces', defaults to true).
-func (r *engine) getInnerText(e *html.Node, normalizeSpaces bool) string {
+func getInnerText(e *html.Node, normalizeSpaces bool) string {
 	text := strings.TrimSpace(textContent(e))
 	if normalizeSpaces {
 		return normalizeWhitespaceRuns(text)
@@ -1965,7 +1919,7 @@ func articleCommaCount(s string) int {
 
 // Remove the style attribute on every e and under.
 // TODO: Test if getElementsByTagName(*) is faster.
-func (r *engine) cleanStyles(e *html.Node) {
+func (r *extractor) cleanStyles(e *html.Node) {
 	if e == nil || strings.ToLower(tagName(e)) == "svg" {
 		return
 	}
@@ -1989,7 +1943,7 @@ func (r *engine) cleanStyles(e *html.Node) {
 
 // Get the density of links as a percentage of the content
 // This is the amount of text that is inside a link divided by the total text in the node.
-func (r *engine) getLinkDensity(element *html.Node) float64 {
+func (r *extractor) getLinkDensity(element *html.Node) float64 {
 	// Count the element text and every link's text in the same walk. The old
 	// implementation first walked the whole subtree, materialized a slice of
 	// links, and then walked each link subtree again.
@@ -2091,7 +2045,7 @@ func (c *normalizedTextCounter) add(s string) {
 
 // Get an elements class/id weight. Uses regular expressions to tell if this
 // element looks good or bad.
-func (r *engine) getClassWeight(e *html.Node) float64 {
+func (r *extractor) getClassWeight(e *html.Node) float64 {
 	if !r.flagIsActive(flagWeightClasses) {
 		return 0
 	}
@@ -2122,11 +2076,11 @@ func (r *engine) getClassWeight(e *html.Node) float64 {
 
 // Clean a node of all elements of type "tag".
 // (Unless it's a youtube/vimeo video. People love movies.)
-func (r *engine) clean(e *html.Node, tag string) {
+func (r *extractor) clean(e *html.Node, tag string) {
 
 	var isEmbed = slices.Contains([]string{"object", "embed", "iframe"}, tag)
 
-	r.removeNodes(r.getAllNodesWithTag(e, tag), func(element *html.Node) bool {
+	r.removeNodes(getAllNodesWithTag(e, tag), func(element *html.Node) bool {
 		// Allow youtube and vimeo videos through as people usually want to see those.
 		if isEmbed {
 			// First, check the elements attributes to see if any of them contain youtube or vimeo
@@ -2147,7 +2101,7 @@ func (r *engine) clean(e *html.Node, tag string) {
 
 // Check if a given node has one of its ancestor tag name matching the
 // provided one.
-func (r *engine) hasAncestorTag(n *html.Node, desiredTag string, maxDepth int, filterFn func(*html.Node) bool) bool {
+func hasAncestorTagWithFilter(n *html.Node, desiredTag string, maxDepth int, filterFn func(*html.Node) bool) bool {
 	desiredTag = strings.ToUpper(desiredTag)
 	var depth = 0
 	for n.Parent != nil {
@@ -2164,7 +2118,7 @@ func (r *engine) hasAncestorTag(n *html.Node, desiredTag string, maxDepth int, f
 }
 
 // Return an object indicating how many rows and columns this table has.
-func (r *engine) getRowAndColumnCount(table *html.Node) (int, int) {
+func (r *extractor) getRowAndColumnCount(table *html.Node) (int, int) {
 	var rows = 0
 	var columns = 0
 	var trs = elementsByTagName(table, "tr")
@@ -2211,7 +2165,7 @@ func (r *engine) getRowAndColumnCount(table *html.Node) (int, int) {
 // Look for 'data' (as opposed to 'layout') tables, for which we use
 // similar checks as
 // https://searchfox.org/mozilla-central/rev/f82d5c549f046cb64ce5602bfd894b7ae807c8f8/accessible/generic/TableAccessible.cpp#19
-func (r *engine) markDataTables(root *html.Node) {
+func (r *extractor) markDataTables(root *html.Node) {
 
 	var tables = elementsByTagName(root, "table")
 	for i := 0; i < len(tables); i++ {
@@ -2277,9 +2231,9 @@ func (r *engine) markDataTables(root *html.Node) {
 }
 
 // convert images and figures that have properties like data-src into images that can be loaded without JS
-func (r *engine) fixLazyImages(root *html.Node) {
+func (r *extractor) fixLazyImages(root *html.Node) {
 
-	for _, elem := range r.getAllNodesWithTag(root, "img", "picture", "figure") {
+	for _, elem := range getAllNodesWithTag(root, "img", "picture", "figure") {
 		// In some sites (e.g. Kotaku), they put 1px square image as base64 data uri in the src attribute.
 		// So, here we check if the data uri is too short, just might as well remove it.
 
@@ -2339,7 +2293,7 @@ func (r *engine) fixLazyImages(root *html.Node) {
 				//if this is an img or picture, set the attribute directly
 				if tagName(elem) == "IMG" || tagName(elem) == "PICTURE" {
 					setAttribute(elem, copyTo, attr.Val)
-				} else if tagName(elem) == "FIGURE" && len(r.getAllNodesWithTag(elem, "img", "picture")) == 0 {
+				} else if tagName(elem) == "FIGURE" && len(getAllNodesWithTag(elem, "img", "picture")) == 0 {
 					//if the item is a <figure> that does not contain an image or picture, create one and place it inside the figure
 					//see the nytimes-3 testcase for an example
 					var img = newElement("img")
@@ -2361,7 +2315,7 @@ type conditionalStats struct {
 // gatherConditionalStats collects all of cleanConditionally's per-tag metrics
 // in one traversal. Heading and list counters are kept on small inline stacks,
 // avoiding both descendant slices and a separate text walk for every element.
-func (r *engine) gatherConditionalStats(root *html.Node) conditionalStats {
+func (r *extractor) gatherConditionalStats(root *html.Node) conditionalStats {
 	var stats conditionalStats
 	var allText normalizedTextCounter
 	var headingStorage [8]normalizedTextCounter
@@ -2433,7 +2387,7 @@ func (r *engine) gatherConditionalStats(root *html.Node) conditionalStats {
 
 // Clean an element of all tags of type "tag" if they look fishy.
 // "Fishy" is an algorithm based on content length, classnames, link density, number of images & embeds, etc.
-func (r *engine) cleanConditionally(e *html.Node, tag string) {
+func (r *extractor) cleanConditionally(e *html.Node, tag string) {
 	if !r.flagIsActive(flagCleanConditionally) {
 		return
 	}
@@ -2444,7 +2398,7 @@ func (r *engine) cleanConditionally(e *html.Node, tag string) {
 	//
 	// TODO: Consider taking into account original contentScore here.
 
-	r.removeNodes(r.getAllNodesWithTag(e, tag), func(n *html.Node) bool {
+	r.removeNodes(getAllNodesWithTag(e, tag), func(n *html.Node) bool {
 		// Candidate subtrees overlap heavily. Gather text length, punctuation,
 		// descendant counts, heading/list text, and embeds in one pass.
 		stats := r.gatherConditionalStats(n)
@@ -2465,11 +2419,11 @@ func (r *engine) cleanConditionally(e *html.Node, tag string) {
 		}
 
 		// Next check if we're inside a data table, in which case don't remove it as well.
-		if r.hasAncestorTag(n, "table", -1, isDataTable) {
+		if hasAncestorTagWithFilter(n, "table", -1, isDataTable) {
 			return false
 		}
 
-		if r.hasAncestorTag(n, "code", 3, nil) {
+		if hasAncestorTagWithFilter(n, "code", 3, nil) {
 			return false
 		}
 
@@ -2503,10 +2457,10 @@ func (r *engine) cleanConditionally(e *html.Node, tag string) {
 			var linkDensity = r.getLinkDensity(n)
 			var contentLength = nodeTextLength
 
-			var haveToRemove = (img > 1 && float64(p)/float64(img) < 0.5 && !r.hasAncestorTag(n, "figure", 3, nil)) ||
+			var haveToRemove = (img > 1 && float64(p)/float64(img) < 0.5 && !hasAncestorTagWithFilter(n, "figure", 3, nil)) ||
 				(!isList && li > p) ||
 				(input > int(math.Floor(float64(p)/3.0))) ||
-				(!isList && headingDensity < 0.9 && contentLength < 25 && (img == 0 || img > 2) && !r.hasAncestorTag(n, "figure", 3, nil)) ||
+				(!isList && headingDensity < 0.9 && contentLength < 25 && (img == 0 || img > 2) && !hasAncestorTagWithFilter(n, "figure", 3, nil)) ||
 				(!isList && weight < 25 && linkDensity > 0.2+r.options.linkDensityModifier) ||
 				(weight >= 25 && linkDensity > 0.5+r.options.linkDensityModifier) ||
 				((embedCount == 1 && contentLength < 75) || embedCount > 1)
@@ -2531,7 +2485,7 @@ func (r *engine) cleanConditionally(e *html.Node, tag string) {
 }
 
 // Clean out elements that match the specified conditions.
-func (r *engine) cleanMatchedNodes(e *html.Node, filter func(*html.Node, string, string) bool) {
+func (r *extractor) cleanMatchedNodes(e *html.Node, filter func(*html.Node, string, string) bool) {
 	var endOfSearchMarkerNode = r.getNextNode(e, true)
 	var next = r.getNextNode(e, false)
 	for next != nil && next != endOfSearchMarkerNode {
@@ -2544,8 +2498,8 @@ func (r *engine) cleanMatchedNodes(e *html.Node, filter func(*html.Node, string,
 }
 
 // Clean out spurious headers from an Element.
-func (r *engine) cleanHeaders(n *html.Node) {
-	var headingNodes = r.getAllNodesWithTag(n, "h1", "h2")
+func (r *extractor) cleanHeaders(n *html.Node) {
+	var headingNodes = getAllNodesWithTag(n, "h1", "h2")
 	r.removeNodes(headingNodes, func(nn *html.Node) bool {
 		var shouldRemove = r.getClassWeight(nn) < 0
 		if shouldRemove {
@@ -2557,26 +2511,26 @@ func (r *engine) cleanHeaders(n *html.Node) {
 
 // Check if this node is an H1 or H2 element whose content is mostly
 // the same as the article title.
-func (r *engine) headerDuplicatesTitle(n *html.Node) bool {
+func (r *extractor) headerDuplicatesTitle(n *html.Node) bool {
 	if tagName(n) != "H1" && tagName(n) != "H2" {
 		return false
 	}
-	var heading = r.getInnerText(n, false)
+	var heading = getInnerText(n, false)
 	r.logDebug("Evaluating similarity of header", "heading", heading, "articleTitle", r.articleTitle)
-	return r.textSimilarity(r.articleTitle, heading) > 0.75
+	return textSimilarity(r.articleTitle, heading) > 0.75
 }
 
-func (r *engine) flagIsActive(flag int) bool {
+func (r *extractor) flagIsActive(flag int) bool {
 	return r.flags&flag > 0
 }
 
-func (r *engine) removeFlag(flag int) {
+func (r *extractor) removeFlag(flag int) {
 	r.flags = r.flags & ^flag
 }
 
 // prepareDocumentTree applies the destructive normalization shared by the
 // initial extraction and each retry. Metadata must be read before calling it.
-func (r *engine) prepareDocumentTree() {
+func (r *extractor) prepareDocumentTree() {
 	r.unwrapNoscriptImages(r.doc)
 	r.removeScripts(r.doc)
 	r.prepDocument()
@@ -2584,13 +2538,8 @@ func (r *engine) prepareDocumentTree() {
 
 // resetDocumentForRetry restores the parser-produced tree by reparsing the
 // source or cloning the immutable ParseNode input.
-func (r *engine) resetDocumentForRetry() {
-	var doc *html.Node
-	if r.restoreDocument != nil {
-		doc = r.restoreDocument()
-	} else {
-		doc = cloneTree(r.original)
-	}
+func (r *extractor) resetDocumentForRetry() {
+	doc := r.resetDocument()
 	r.doc = doc
 	r.body = findElement(doc, "body")
 	r.documentElement = findElement(doc, "html")
@@ -2602,20 +2551,12 @@ func (r *engine) resetDocumentForRetry() {
 	r.prepareDocumentTree()
 }
 
-// Parse prepares the document, extracts the main article, and returns the
-// article with its metadata.
-func (r *engine) Parse() (*engineResult, error) {
+// extract prepares the document, extracts the main article, and returns it
+// with its metadata.
+func (r *extractor) extract() (*Article, error) {
 	// Normalize only the mutable working tree. In particular, ParseNode must
 	// leave the caller's parsed document untouched.
 	prepareMathJax(r.doc)
-
-	// Avoid parsing too large documents, as per configuration option
-	if r.options.maxElemsToParse > 0 {
-		var numTags = countElementsByTagName(r.doc, "*")
-		if numTags > r.options.maxElemsToParse {
-			return nil, fmt.Errorf("aborting parsing document: elements_found=%d", numTags)
-		}
-	}
 
 	// Unwrap images before reading metadata, matching the normal preparation
 	// order used by Readability.
@@ -2654,27 +2595,18 @@ func (r *engine) Parse() (*engineResult, error) {
 		}
 	}
 
-	htmlContent := r.options.serializer(articleContent)
+	content := innerHTML(articleContent)
+	// Collapse ordinary source formatting whitespace while walking the DOM,
+	// without changing whitespace-sensitive elements such as pre and textarea.
+	extractedText, extractedLength := normalizedTextContent(articleContent)
 
-	var extractedText string
-	var extractedLength int
-	if r.options.html2text != nil {
-		extractedText = r.options.html2text(htmlContent)
-		extractedLength = characterCount(extractedText)
-	} else {
-		// Collapse ordinary source formatting whitespace while walking the DOM,
-		// without changing whitespace-sensitive elements such as pre and textarea.
-		// This avoids retaining a potentially much larger raw textContent allocation.
-		extractedText, extractedLength = normalizedTextContent(articleContent)
-	}
-
-	return &engineResult{
+	return &Article{
 		Title:         r.articleTitle,
 		Node:          articleContent,
 		Byline:        anyOf(metadata.byline, r.articleByline),
 		Dir:           r.articleDir,
 		Lang:          r.articleLang,
-		HTMLContent:   htmlContent,
+		Content:       content,
 		TextContent:   extractedText,
 		Length:        extractedLength,
 		Excerpt:       metadata.excerpt,

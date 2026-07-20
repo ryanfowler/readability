@@ -31,16 +31,6 @@ func elementsByTagName(n *html.Node, tag string) []*html.Node {
 	})
 	return out
 }
-func countElementsByTagName(n *html.Node, tag string) int {
-	count := 0
-	walkNodes(n, func(x *html.Node) bool {
-		if x != n && x.Type == html.ElementNode && (tag == "*" || x.Data == tag) {
-			count++
-		}
-		return false
-	})
-	return count
-}
 func firstChild(n *html.Node) *html.Node {
 	if n == nil {
 		return nil
@@ -572,7 +562,7 @@ func newElement(tag string) *html.Node {
 }
 
 // cloneTree makes a detached copy of an HTML tree. Readability mutates its
-// input, so the engine keeps one native-tree snapshot for extraction retries.
+// input, so the extractor keeps one native-tree snapshot for extraction retries.
 func cloneTree(n *html.Node) *html.Node {
 	if n == nil {
 		return nil

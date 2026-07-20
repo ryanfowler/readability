@@ -16,7 +16,7 @@ func TestMarkDataTablesSmallCaptionedTable(t *testing.T) {
 	}
 
 	table := elementsByTagName(doc, "table")[0]
-	r := &engine{options: defaultOpts(), nodeState: make(map[*html.Node]*nodeData)}
+	r := &extractor{options: defaultExtractionOptions(), nodeState: make(map[*html.Node]*nodeData)}
 	r.markDataTables(doc)
 
 	if !r.data(table).isDataTable {
@@ -41,7 +41,7 @@ func TestMarkDataTablesLargeTableContainingNestedTable(t *testing.T) {
 		t.Fatalf("table count = %d, want 2", len(tables))
 	}
 	outerTable := tables[0]
-	r := &engine{options: defaultOpts(), nodeState: make(map[*html.Node]*nodeData)}
+	r := &extractor{options: defaultExtractionOptions(), nodeState: make(map[*html.Node]*nodeData)}
 	r.markDataTables(doc)
 
 	if r.data(outerTable).isDataTable {
