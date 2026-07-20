@@ -1488,6 +1488,61 @@ type metadata struct {
 	publishedTime string
 }
 
+func isSchemaContext(value interface{}) bool {
+	return schemaUrl.MatchString(jsonLDContextVocab(value, ""))
+}
+
+// jsonLDContextVocab applies the context entries in order. A later @vocab
+// declaration overrides (or resets) the vocabulary established earlier.
+func jsonLDContextVocab(value interface{}, vocab string) string {
+	switch context := value.(type) {
+	case string:
+		// Resolving arbitrary remote contexts is outside the scope of metadata
+		// extraction, but the Schema.org context has a known vocabulary.
+		if schemaUrl.MatchString(context) {
+			return context
+		}
+	case map[string]interface{}:
+		value, exists := context["@vocab"]
+		if !exists {
+			return vocab
+		}
+		if value == nil {
+			return ""
+		}
+		if declared, ok := value.(string); ok {
+			return declared
+		}
+		return ""
+	case []interface{}:
+		for _, item := range context {
+			vocab = jsonLDContextVocab(item, vocab)
+		}
+	}
+	return vocab
+}
+
+func isJSONLDArticleType(value interface{}) bool {
+	switch typ := value.(type) {
+	case string:
+		for _, prefix := range []string{"https://schema.org/", "http://schema.org/"} {
+			if strings.HasPrefix(typ, prefix) {
+				typ = strings.TrimPrefix(typ, prefix)
+				break
+			}
+		}
+		_, ok := jsonLdArticleTypes[typ]
+		return ok
+	case []interface{}:
+		for _, item := range typ {
+			if isJSONLDArticleType(item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // Try to extract metadata from JSON-LD object.
 // For now, only Schema.org objects of type Article or its subtypes are supported.
 func (r *engine) getJSONLD(doc *html.Node) *metadata {
@@ -1512,32 +1567,22 @@ func (r *engine) getJSONLD(doc *html.Node) *metadata {
 			}
 		}
 		for _, root := range objects {
-			validContext := false
-			switch c := root["@context"].(type) {
-			case string:
-				validContext = schemaUrl.MatchString(c)
-			case map[string]interface{}:
-				if v, ok := c["@vocab"].(string); ok {
-					validContext = schemaUrl.MatchString(v)
-				}
-			}
-			if !validContext {
+			if !isSchemaContext(root["@context"]) {
 				continue
 			}
+
+			// A graph is a container, so inspect its objects even when the
+			// container has an unrelated @type of its own.
 			candidates := []map[string]interface{}{root}
-			if _, ok := root["@type"]; !ok {
-				candidates = nil
-				if graph, ok := root["@graph"].([]interface{}); ok {
-					for _, x := range graph {
-						if m, ok := x.(map[string]interface{}); ok {
-							candidates = append(candidates, m)
-						}
+			if graph, ok := root["@graph"].([]interface{}); ok {
+				for _, x := range graph {
+					if m, ok := x.(map[string]interface{}); ok {
+						candidates = append(candidates, m)
 					}
 				}
 			}
 			for _, parsed := range candidates {
-				typ, ok := parsed["@type"].(string)
-				if !ok || !jsonLdArticleTypes.MatchString(typ) {
+				if !isJSONLDArticleType(parsed["@type"]) {
 					continue
 				}
 				m := &metadata{}
