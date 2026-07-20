@@ -442,67 +442,14 @@ func (r *engine) fixRelativeUris(articleContent *html.Node) {
 			// Something went wrong, just return the original:
 			return uri
 		}
-		u := base.ResolveReference(ref)
-		// Build the result once. Repeated string concatenation made one allocation
-		// for nearly every URL component, which is costly on link-heavy pages.
-		var abs strings.Builder
-		abs.Grow(len(baseURI) + len(uri) + 8)
-		if u.Scheme != "" {
-			abs.WriteString(u.Scheme)
-			if strings.HasPrefix(u.Scheme, "http") {
-				abs.WriteString("://")
-			} else {
-				abs.WriteByte(':')
-			}
+		abs := base.ResolveReference(ref).String()
+		// url.URL records an empty query with ForceQuery, but has no
+		// corresponding field for an explicitly empty fragment. Preserve that
+		// marker without reconstructing any of the URL's components.
+		if strings.HasSuffix(uri, "#") && !strings.HasSuffix(abs, "#") {
+			abs += "#"
 		}
-		abs.WriteString(strings.ToLower(u.Host))
-
-		var b, a string
-		if strings.Contains(uri, "?") {
-			before, _, _ := strings.Cut(uri, "?")
-			b = before
-		} else if strings.Contains(uri, "#") {
-			before, after, _ := strings.Cut(uri, "#")
-			b = before
-			a = after
-		} else {
-			b = uri
-		}
-
-		if u.Path != "" {
-			p := u.Path
-			if strings.Contains(uri, "%") {
-				if strings.HasPrefix(uri, "//") {
-					p = doubleForwardSlashes.ReplaceAllString(b, "")
-				} else {
-					p = strings.ReplaceAll(b, abs.String(), "")
-				}
-			}
-			abs.WriteString(strings.ReplaceAll(p, "/C|/", "/C:/"))
-		} else if u.Opaque != "" {
-			abs.WriteString(u.Opaque)
-		} else {
-			abs.WriteByte('/')
-		}
-		if u.RawQuery != "" {
-			abs.WriteByte('?')
-			abs.WriteString(u.RawQuery)
-		}
-		if u.Fragment != "" {
-			abs.WriteByte('#')
-			if strings.Contains(a, "%") {
-				abs.WriteString(a)
-			} else {
-				abs.WriteString(u.Fragment)
-			}
-		}
-		if strings.HasSuffix(uri, "#") && (abs.Len() == 0 || abs.String()[abs.Len()-1] != '#') {
-			abs.WriteByte('#')
-		}
-		if strings.HasSuffix(uri, "?") && (abs.Len() == 0 || abs.String()[abs.Len()-1] != '?') {
-			abs.WriteByte('?')
-		}
-		return abs.String()
+		return abs
 	}
 
 	processLink := func(link *html.Node) {
