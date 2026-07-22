@@ -21,15 +21,38 @@ func walkNodes(n *html.Node, fn func(*html.Node) bool) {
 	}
 }
 func elementsByTagName(n *html.Node, tag string) []*html.Node {
+	if n == nil {
+		return nil
+	}
 	tag = strings.ToLower(tag)
 	var out []*html.Node
-	walkNodes(n, func(x *html.Node) bool {
-		if x != n && x.Type == html.ElementNode && (tag == "*" || x.Data == tag) {
-			out = append(out, x)
-		}
-		return false
-	})
+	if tag == "*" {
+		appendDescendantElements(n, &out)
+	} else {
+		appendDescendantElementsByTag(n, tag, &out)
+	}
 	return out
+}
+
+// These specialized walkers avoid a closure call and repeated wildcard check
+// for every node. Tag collection is frequent during cleanup, especially on
+// large, deeply nested documents.
+func appendDescendantElements(n *html.Node, out *[]*html.Node) {
+	for child := n.FirstChild; child != nil; child = child.NextSibling {
+		if child.Type == html.ElementNode {
+			*out = append(*out, child)
+		}
+		appendDescendantElements(child, out)
+	}
+}
+
+func appendDescendantElementsByTag(n *html.Node, tag string, out *[]*html.Node) {
+	for child := n.FirstChild; child != nil; child = child.NextSibling {
+		if child.Type == html.ElementNode && child.Data == tag {
+			*out = append(*out, child)
+		}
+		appendDescendantElementsByTag(child, tag, out)
+	}
 }
 func firstChild(n *html.Node) *html.Node {
 	if n == nil {
