@@ -1052,15 +1052,25 @@ func (r *extractor) grabArticle(page *html.Node) *html.Node {
 
 			// If this paragraph is less than 25 characters, don't even count it.
 			var innerText = getInnerText(elementToScore, true)
-			if characterCount(innerText) < 25 {
+			innerTextLength := characterCount(innerText)
+			if innerTextLength < 25 {
 				continue
 			}
 
 			// Exclude nodes with no ancestor.
-			var ancestors = getNodeAncestors(elementToScore, 5)
-			if len(ancestors) == 0 {
+			// Keep the bounded ancestor list on the stack. This loop runs once
+			// for every scoreable paragraph, so allocating a slice here creates
+			// substantial allocator and GC pressure on long articles.
+			var ancestorStorage [5]*html.Node
+			ancestorCount := 0
+			for ancestor := elementToScore.Parent; ancestor != nil && ancestorCount < len(ancestorStorage); ancestor = ancestor.Parent {
+				ancestorStorage[ancestorCount] = ancestor
+				ancestorCount++
+			}
+			if ancestorCount == 0 {
 				continue
 			}
+			ancestors := ancestorStorage[:ancestorCount]
 
 			var contentScore float64 = 0
 
@@ -1072,7 +1082,7 @@ func (r *extractor) grabArticle(page *html.Node) *html.Node {
 			contentScore += float64(articleCommaCount(innerText) + 1)
 
 			// For every 100 characters in this paragraph, add another point. Up to 3 points.
-			contentScore += math.Min(math.Floor(float64(characterCount(innerText))/100), 3)
+			contentScore += math.Min(math.Floor(float64(innerTextLength)/100), 3)
 
 			for level, ancestor := range ancestors {
 				if tagName(ancestor) == "" || ancestor.Parent == nil || tagName(ancestor.Parent) == "" {
@@ -1337,7 +1347,10 @@ func (r *extractor) grabArticle(page *html.Node) *html.Node {
 		// grabArticle with different flags set. This gives us a higher likelihood of
 		// finding the content, and the sieve approach gives us a higher likelihood of
 		// finding the -right- content.
-		var textLength = characterCount(getInnerText(articleContent, true))
+		// Only the length is needed to decide whether to retry. Count normalized
+		// text directly instead of building and then discarding a potentially
+		// large string on every extraction attempt.
+		var textLength = normalizedTextLength(articleContent)
 		if textLength < r.options.charThreshold {
 			parseSuccessful = false
 
@@ -2033,21 +2046,32 @@ func (c *normalizedTextCounter) add(s string) {
 			continue
 		}
 
+		// Collapse a complete run of ASCII whitespace in one step. Source HTML
+		// commonly contains long indentation runs, and processing those a byte
+		// at a time dominated normalized text accounting on large fixtures.
+		if isASCIIWhitespace(s[i]) {
+			if c.asciiRun == 0 {
+				c.pending++
+			}
+			c.asciiRun = 1
+			i++
+			for i < len(s) && isASCIIWhitespace(s[i]) {
+				i++
+			}
+			continue
+		}
+
 		ch := rune(s[i])
 		size := 1
 		if s[i] >= utf8.RuneSelf {
 			ch, size = utf8.DecodeRuneInString(s[i:])
 		}
 		i += size
-		space := ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' || ch == '\f'
-		if space {
-			if c.asciiRun == 0 {
-				c.pending++
-			}
-			c.asciiRun++
-			continue
-		}
-		if ch >= utf8.RuneSelf && unicode.IsSpace(ch) {
+		// Vertical tab is Unicode whitespace but is not part of Go regexp's
+		// ASCII \s class. Treat it like other non-collapsible Unicode spaces so
+		// leading/trailing trimming and internal length stay consistent with
+		// getInnerText.
+		if unicode.IsSpace(ch) {
 			c.pending++
 			c.asciiRun = 0
 			continue
@@ -2062,6 +2086,25 @@ func (c *normalizedTextCounter) add(s string) {
 		}
 		c.started = true
 	}
+}
+
+// normalizedTextLength returns the UTF-16 length of getInnerText(n, true)
+// without materializing the normalized text.
+func normalizedTextLength(n *html.Node) int {
+	var text normalizedTextCounter
+	var visit func(*html.Node)
+	visit = func(node *html.Node) {
+		if node.Type == html.TextNode {
+			text.add(node.Data)
+		}
+		for child := node.FirstChild; child != nil; child = child.NextSibling {
+			visit(child)
+		}
+	}
+	if n != nil {
+		visit(n)
+	}
+	return text.length
 }
 
 // Get an elements class/id weight. Uses regular expressions to tell if this
