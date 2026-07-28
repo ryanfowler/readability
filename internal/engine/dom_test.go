@@ -87,3 +87,25 @@ func TestDecodeHTML(t *testing.T) {
 		})
 	}
 }
+
+func TestNormalizedTextLengthMatchesInnerText(t *testing.T) {
+	tests := []string{
+		`<p>  Alpha
+			<span> beta	😀 </span> gamma  </p>`,
+		"<div>\u00a0Alpha\u00a0<span>beta</span>\u00a0</div>",
+		"<div>\v Alpha \v <span>Beta</span> \v</div>",
+		"<pre>  retained\nspacing 😀  </pre>",
+	}
+
+	for _, source := range tests {
+		doc, err := parseHTML(`<html><body>` + source + `</body></html>`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := findElement(doc, "body")
+		want := characterCount(getInnerText(body, true))
+		if got := normalizedTextLength(body); got != want {
+			t.Errorf("normalizedTextLength(%q) = %d, want %d", source, got, want)
+		}
+	}
+}
