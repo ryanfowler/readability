@@ -248,6 +248,93 @@ func nodeID(n *html.Node) string          { return getAttribute(n, "id") }
 func setNodeID(n *html.Node, s string)    { setAttribute(n, "id", s) }
 func nodeSrc(n *html.Node) string         { return getAttribute(n, "src") }
 func nodeSrcset(n *html.Node) string      { return getAttribute(n, "srcset") }
+
+// nodeAttrs holds the attributes that extraction inspects on almost every
+// element it visits. Collecting them in one scan of n.Attr replaces up to
+// nine separate linear lookups per element.
+type nodeAttrs struct {
+	class, id, style      string
+	role, rel, itemprop   string
+	ariaModal, ariaHidden string
+	hidden                bool
+}
+
+func collectNodeAttrs(n *html.Node, a *nodeAttrs) {
+	a.class, a.id, a.style = "", "", ""
+	a.role, a.rel, a.itemprop = "", "", ""
+	a.ariaModal, a.ariaHidden = "", ""
+	a.hidden = false
+	fold := false
+	for i := range n.Attr {
+		key := n.Attr[i].Key
+		switch key {
+		case "class":
+			a.class = n.Attr[i].Val
+		case "id":
+			a.id = n.Attr[i].Val
+		case "style":
+			a.style = n.Attr[i].Val
+		case "role":
+			a.role = n.Attr[i].Val
+		case "rel":
+			a.rel = n.Attr[i].Val
+		case "itemprop":
+			a.itemprop = n.Attr[i].Val
+		case "aria-modal":
+			a.ariaModal = n.Attr[i].Val
+		case "aria-hidden":
+			a.ariaHidden = n.Attr[i].Val
+		case "hidden":
+			a.hidden = true
+		default:
+			if !fold && attrKeyNeedsFold(key) {
+				fold = true
+			}
+		}
+	}
+	if fold {
+		// Parsed documents always have lowercase attribute names. Only trees
+		// built by hand and handed to ParseNode can contain others.
+		if a.class == "" {
+			a.class = getAttribute(n, "class")
+		}
+		if a.id == "" {
+			a.id = getAttribute(n, "id")
+		}
+		if a.style == "" {
+			a.style = getAttribute(n, "style")
+		}
+		if a.role == "" {
+			a.role = getAttribute(n, "role")
+		}
+		if a.rel == "" {
+			a.rel = getAttribute(n, "rel")
+		}
+		if a.itemprop == "" {
+			a.itemprop = getAttribute(n, "itemprop")
+		}
+		if a.ariaModal == "" {
+			a.ariaModal = getAttribute(n, "aria-modal")
+		}
+		if a.ariaHidden == "" {
+			a.ariaHidden = getAttribute(n, "aria-hidden")
+		}
+		if !a.hidden {
+			a.hidden = hasAttribute(n, "hidden")
+		}
+	}
+}
+
+// attrKeyNeedsFold reports whether key may not equal its lowercase form.
+func attrKeyNeedsFold(key string) bool {
+	for i := 0; i < len(key); i++ {
+		c := key[i]
+		if (c >= 'A' && c <= 'Z') || c >= utf8.RuneSelf {
+			return true
+		}
+	}
+	return false
+}
 func tagName(n *html.Node) string {
 	if n == nil || n.Type != html.ElementNode {
 		return ""
@@ -559,6 +646,13 @@ type normalizedTextWriter struct {
 }
 
 func (w *normalizedTextWriter) add(s string) {
+	// Keep the running state in registers for the duration of the scan; the
+	// receiver fields are only written back at the end.
+	var (
+		started                               = w.started
+		pendingWhitespace, trailingWhitespace = w.pendingWhitespace, w.trailingWhitespace
+		bytes, utf16                          = w.bytes, w.utf16
+	)
 	for i := 0; i < len(s); {
 		// Consume printable ASCII in batches. This avoids rune decoding and
 		// Unicode table lookups for almost all article text.
@@ -567,37 +661,59 @@ func (w *normalizedTextWriter) add(s string) {
 			for i < len(s) && s[i] > ' ' && s[i] < utf8.RuneSelf {
 				i++
 			}
-			w.flushSpace()
-			w.bytes += i - start
-			w.utf16 += i - start
+			if pendingWhitespace && !trailingWhitespace {
+				bytes++
+				utf16++
+				if w.out != nil {
+					w.out.WriteByte(' ')
+				}
+				pendingWhitespace = false
+				trailingWhitespace = true
+			} else {
+				pendingWhitespace = false
+			}
+			bytes += i - start
+			utf16 += i - start
 			if w.out != nil {
 				w.out.WriteString(s[start:i])
 			}
-			w.started = true
-			w.trailingWhitespace = false
+			started = true
+			trailingWhitespace = false
 			continue
 		}
 
 		ch, size := utf8.DecodeRuneInString(s[i:])
 		i += size
 		if unicode.IsSpace(ch) {
-			if w.started && !w.trailingWhitespace {
-				w.pendingWhitespace = true
+			if started && !trailingWhitespace {
+				pendingWhitespace = true
 			}
 			continue
 		}
-		w.flushSpace()
-		w.bytes += size
-		w.utf16++
+		if pendingWhitespace && !trailingWhitespace {
+			bytes++
+			utf16++
+			if w.out != nil {
+				w.out.WriteByte(' ')
+			}
+			pendingWhitespace = false
+			trailingWhitespace = true
+		} else {
+			pendingWhitespace = false
+		}
+		bytes += size
+		utf16++
 		if ch > 0xffff {
-			w.utf16++
+			utf16++
 		}
 		if w.out != nil {
 			w.out.WriteString(s[i-size : i])
 		}
-		w.started = true
-		w.trailingWhitespace = false
+		started = true
+		trailingWhitespace = false
 	}
+	w.started, w.pendingWhitespace, w.trailingWhitespace = started, pendingWhitespace, trailingWhitespace
+	w.bytes, w.utf16 = bytes, utf16
 }
 
 func (w *normalizedTextWriter) addVerbatim(s string) {
@@ -756,7 +872,13 @@ func getStyle(n *html.Node, key string) string {
 	if key == "backgroundImage" {
 		key = "background-image"
 	}
-	style := getAttribute(n, "style")
+	return styleValue(getAttribute(n, "style"), key)
+}
+
+// styleValue resolves key within an inline style declaration list. A later
+// declaration wins among declarations with equal priority, but a
+// non-important declaration cannot override an important one.
+func styleValue(style, key string) string {
 	var value string
 	winningImportant := false
 	for len(style) != 0 {
@@ -774,8 +896,6 @@ func getStyle(n *html.Node, key string) string {
 				candidate = strings.TrimSpace(candidate[:i])
 				candidateImportant = true
 			}
-			// A later declaration wins among declarations with equal priority,
-			// but a non-important declaration cannot override an important one.
 			if candidateImportant || !winningImportant {
 				value = candidate
 				winningImportant = candidateImportant
