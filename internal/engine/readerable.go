@@ -29,16 +29,22 @@ import (
 )
 
 func isNodeVisible(node *html.Node) bool {
-	// Approximate the browser's style.display/style.visibility properties for
-	// inline declarations. CSS property names and keyword values are ASCII
-	// case-insensitive.
-	if strings.EqualFold(getStyle(node, "display"), "none") ||
-		strings.EqualFold(getStyle(node, "visibility"), "hidden") ||
-		hasAttribute(node, "hidden") {
+	return isVisibleAttrs(getAttribute(node, "style"), getAttribute(node, "aria-hidden"),
+		className(node), hasAttribute(node, "hidden"))
+}
+
+// isVisibleAttrs approximates the browser's style.display/style.visibility
+// properties for inline declarations plus the hidden and aria-hidden
+// attributes. CSS property names and keyword values are ASCII
+// case-insensitive. The main extraction walk calls this with values gathered
+// by collectNodeAttrs.
+func isVisibleAttrs(style, ariaHidden, class string, hidden bool) bool {
+	if strings.EqualFold(styleValue(style, "display"), "none") ||
+		strings.EqualFold(styleValue(style, "visibility"), "hidden") || hidden {
 		return false
 	}
-	return !strings.EqualFold(getAttribute(node, "aria-hidden"), "true") ||
-		(className(node) != "" && strings.Contains(className(node), "fallback-image"))
+	return !strings.EqualFold(ariaHidden, "true") ||
+		strings.Contains(class, "fallback-image")
 }
 
 // isProbablyReaderable applies the fast readerability heuristic to doc.

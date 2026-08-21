@@ -1,18 +1,29 @@
 package engine
 
-import "golang.org/x/net/html"
+import (
+	"unicode/utf8"
+
+	"golang.org/x/net/html"
+)
 
 // characterCount returns the number of UTF-16 code units in s. Readability's
 // thresholds originate in JavaScript, where String.length has this semantic.
 func characterCount(s string) int {
-	count := 0
-	for _, r := range s {
-		count++
-		if r > 0xffff {
-			count++
+	// Article text is overwhelmingly ASCII, where the answer is simply the
+	// byte length. Scan for the first multi-byte rune before counting.
+	for i := 0; i < len(s); i++ {
+		if s[i] >= utf8.RuneSelf {
+			count := i
+			for _, r := range s[i:] {
+				count++
+				if r > 0xffff {
+					count++
+				}
+			}
+			return count
 		}
 	}
-	return count
+	return len(s)
 }
 
 func insert(newNode *html.Node, idx int, nodes []*html.Node) []*html.Node {

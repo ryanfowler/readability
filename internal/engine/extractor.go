@@ -50,12 +50,7 @@ const (
 )
 
 var (
-	// Element tags to score by default.
-	defaultTagsToScore = []string{"SECTION", "H2", "H3", "H4", "H5", "H6", "P", "TD", "PRE"}
-
 	unlinkelyRoles = []string{"menu", "menubar", "complementary", "navigation", "alert", "alertdialog", "dialog"}
-
-	divToPElemns = []string{"BLOCKQUOTE", "DL", "DIV", "IMG", "OL", "P", "PRE", "TABLE", "UL"}
 
 	alterToDiveExceptions = []string{"DIV", "ARTICLE", "SECTION", "P"}
 
@@ -499,7 +494,7 @@ func (r *extractor) getArticleTitle() string {
 	if curTitle == "" {
 		titles := elementsByTagName(doc, "title")
 		if len(titles) != 0 {
-			curTitle = getInnerText(elementsByTagName(doc, "title")[0], true)
+			curTitle = getInnerText(titles[0], true)
 			origTitle = curTitle
 		}
 	}
@@ -587,10 +582,25 @@ func (r *extractor) nextNode(n *html.Node) *html.Node {
 	var next = n
 	for next != nil &&
 		next.Type != html.ElementNode &&
-		whitespace.MatchString(textContent(next)) {
+		isWhitespaceOnlyNode(next) {
 		next = next.NextSibling
 	}
 	return next
+}
+
+// isWhitespaceOnlyNode mirrors whitespace.MatchString(textContent(n)) for the
+// childless nodes that appear between elements, without materializing text or
+// starting the regexp machine.
+func isWhitespaceOnlyNode(n *html.Node) bool {
+	if n.FirstChild != nil {
+		return whitespace.MatchString(textContent(n))
+	}
+	for i := 0; i < len(n.Data); i++ {
+		if !isASCIIWhitespace(n.Data[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // Replaces 2 or more successive <br> elements with a single <p>.
@@ -775,24 +785,24 @@ func (r *extractor) prepArticle(articleContent *html.Node) {
 // Initialize a node with the readability object. Also checks the
 // className/id for special names to add to its score.
 func (r *extractor) initializeNode(n *html.Node) {
-
-	r.data(n).contentScore = 0
+	d := r.data(n)
+	d.contentScore = 0
 
 	switch tagName(n) {
 	case "DIV":
-		r.data(n).contentScore += 5
+		d.contentScore += 5
 
 	case "PRE", "TD", "BLOCKQUOTE":
-		r.data(n).contentScore += 3
+		d.contentScore += 3
 
 	case "ADDRESS", "OL", "UL", "DL", "DD", "DT", "LI", "FORM":
-		r.data(n).contentScore -= 3
+		d.contentScore -= 3
 
 	case "H1", "H2", "H3", "H4", "H5", "H6", "TH":
-		r.data(n).contentScore -= 5
+		d.contentScore -= 5
 	}
 
-	r.data(n).contentScore += r.getClassWeight(n)
+	d.contentScore += r.getClassWeight(n)
 }
 
 func (r *extractor) removeAndGetNext(n *html.Node) *html.Node {
@@ -855,13 +865,10 @@ func textSimilarity(textA, textB string) float64 {
 	return 1 - float64(uniqueLength)/float64(totalLength)
 }
 
-func (r *extractor) checkByline(n *html.Node, class, id string) bool {
+func (r *extractor) checkByline(n *html.Node, class, id, rel, itemprop string) bool {
 	if r.articleByline != "" {
 		return false
 	}
-
-	var rel = getAttribute(n, "rel")
-	var itemprop = getAttribute(n, "itemprop")
 
 	if (rel == "author" || strings.Contains(itemprop, "author") || matchesByline(class) || matchesByline(id)) && isValidByline(textContent(n)) {
 		bylineNode := n
@@ -924,6 +931,9 @@ func (r *extractor) grabArticle(page *html.Node) *html.Node {
 
 		var shouldRemoveTitleHeader bool = true
 
+		// Reused across iterations so the hot loop does not reset it node by node.
+		var a nodeAttrs
+
 		for n != nil {
 
 			// Computing textContent for every node is quadratic for deeply nested
@@ -933,26 +943,31 @@ func (r *extractor) grabArticle(page *html.Node) *html.Node {
 				r.logDebug("elementsToScore", "nodeText", textContent(n))
 			}
 
-			if tagName(n) == "HTML" {
+			tag := tagName(n)
+
+			if tag == "HTML" {
 				r.articleLang = getAttribute(n, "lang")
 			}
 
-			class, id := className(n), nodeID(n)
+			// One scan collects every attribute this loop inspects; the checks
+			// below previously performed up to nine linear lookups per element.
+			collectNodeAttrs(n, &a)
+			class, id := a.class, a.id
 
-			if !isNodeVisible(n) {
+			if !isVisibleAttrs(a.style, a.ariaHidden, class, a.hidden) {
 				r.logDebug("Removing hidden node", "class", class, "id", id)
 				n = r.removeAndGetNext(n)
 				continue
 			}
 
 			// User is not able to see elements applied with both "aria-modal = true" and "role = dialog"
-			if getAttribute(n, "aria-modal") == "true" && getAttribute(n, "role") == "dialog" {
+			if a.ariaModal == "true" && a.role == "dialog" {
 				n = r.removeAndGetNext(n)
 				continue
 			}
 
 			// Check to see if this node is a byline, and remove it if it is.
-			if r.checkByline(n, class, id) {
+			if r.checkByline(n, class, id, a.rel, a.itemprop) {
 				n = r.removeAndGetNext(n)
 				continue
 			}
@@ -970,30 +985,32 @@ func (r *extractor) grabArticle(page *html.Node) *html.Node {
 					!matchesMaybeCandidate(class) && !matchesMaybeCandidate(id) &&
 					!hasAncestorTagWithFilter(n, "table", 3, nil) &&
 					!hasAncestorTagWithFilter(n, "code", 3, nil) &&
-					tagName(n) != "BODY" &&
-					tagName(n) != "A" {
+					tag != "BODY" &&
+					tag != "A" {
 					r.logDebug("Removing unlikely candidate", "class", class, "id", id)
 					n = r.removeAndGetNext(n)
 					continue
 				}
 			}
 
-			if slices.Contains(unlinkelyRoles, getAttribute(n, "role")) {
-				r.logDebug("Removing content", "role", getAttribute(n, "role"), "class", class, "id", id)
+			switch a.role {
+			case "menu", "menubar", "complementary", "navigation", "alert", "alertdialog", "dialog":
+				r.logDebug("Removing content", "role", a.role, "class", class, "id", id)
 				n = r.removeAndGetNext(n)
 				continue
 			}
 
-			// Remove DIV, SECTION, and HEADER nodes without any content(e.g. text, image, video, or iframe).
-			if (tagName(n) == "DIV" || tagName(n) == "SECTION" || tagName(n) == "HEADER" ||
-				tagName(n) == "H1" || tagName(n) == "H2" || tagName(n) == "H3" ||
-				tagName(n) == "H4" || tagName(n) == "H5" || tagName(n) == "H6") &&
-				isElementWithoutContent(n) {
-				n = r.removeAndGetNext(n)
-				continue
+			switch tag {
+			case "DIV", "SECTION", "HEADER", "H1", "H2", "H3", "H4", "H5", "H6":
+				// Remove DIV, SECTION, and HEADER nodes without any content(e.g. text, image, video, or iframe).
+				if isElementWithoutContent(n) {
+					n = r.removeAndGetNext(n)
+					continue
+				}
 			}
 
-			if slices.Contains(defaultTagsToScore, tagName(n)) {
+			switch tag {
+			case "SECTION", "H2", "H3", "H4", "H5", "H6", "P", "TD", "PRE":
 				elementsToScore = append(elementsToScore, n)
 			}
 
@@ -1051,8 +1068,10 @@ func (r *extractor) grabArticle(page *html.Node) *html.Node {
 			}
 
 			// If this paragraph is less than 25 characters, don't even count it.
-			var innerText = getInnerText(elementToScore, true)
-			innerTextLength := characterCount(innerText)
+			// Only the normalized length and comma count are needed here, so
+			// count them in one walk instead of building and re-scanning the
+			// inner text string.
+			innerTextLength, commaCount := subtreeTextStats(elementToScore)
 			if innerTextLength < 25 {
 				continue
 			}
@@ -1077,9 +1096,8 @@ func (r *extractor) grabArticle(page *html.Node) *html.Node {
 			// Add a point for the paragraph itself as a base.
 			contentScore += 1
 
-			// Add points for any commas within this paragraph. Split was only
-			// used to obtain this count and allocated one string per segment.
-			contentScore += float64(articleCommaCount(innerText) + 1)
+			// Add points for any commas within this paragraph.
+			contentScore += float64(commaCount + 1)
 
 			// For every 100 characters in this paragraph, add another point. Up to 3 points.
 			contentScore += math.Min(math.Floor(float64(innerTextLength)/100), 3)
@@ -1798,21 +1816,39 @@ func isElementWithoutContent(n *html.Node) bool {
 	}
 
 	// Preserve Readability's slightly unusual comparison of direct element
-	// children with all descendant BR/HR elements, but avoid constructing three
-	// node lists (and repeatedly materializing the subtree's text) to do it.
+	// children with all descendant BR/HR elements, but gather both counts in a
+	// single walk instead of constructing three node lists and repeatedly
+	// materializing the subtree's text.
 	directElements, breaks := 0, 0
 	for child := n.FirstChild; child != nil; child = child.NextSibling {
-		if child.Type == html.ElementNode {
-			directElements++
+		if child.Type != html.ElementNode {
+			continue
 		}
-	}
-	walkNodes(n, func(node *html.Node) bool {
-		if node != n && node.Type == html.ElementNode && (node.Data == "br" || node.Data == "hr") {
+		directElements++
+		if child.Data == "br" || child.Data == "hr" {
 			breaks++
+			continue
 		}
-		return false
-	})
+		breaks += countNestedBreaks(child)
+	}
 	return directElements == 0 || directElements == breaks
+}
+
+// countNestedBreaks counts descendant BR/HR elements below n. Direct children
+// of n are excluded because the caller counts them itself.
+func countNestedBreaks(n *html.Node) int {
+	count := 0
+	for child := n.FirstChild; child != nil; child = child.NextSibling {
+		if child.Type != html.ElementNode {
+			continue
+		}
+		if child.Data == "br" || child.Data == "hr" {
+			count++
+			continue
+		}
+		count += countNestedBreaks(child)
+	}
+	return count
 }
 
 // hasNonWhitespaceText answers the common emptiness question without building
@@ -1821,7 +1857,7 @@ func isElementWithoutContent(n *html.Node) bool {
 func hasNonWhitespaceText(n *html.Node) bool {
 	var visit func(*html.Node) bool
 	visit = func(node *html.Node) bool {
-		if node.Type == html.TextNode && strings.TrimSpace(node.Data) != "" {
+		if node.Type == html.TextNode && hasNonWhitespace(node.Data) {
 			return true
 		}
 		for child := node.FirstChild; child != nil; child = child.NextSibling {
@@ -1834,12 +1870,48 @@ func hasNonWhitespaceText(n *html.Node) bool {
 	return visit(n)
 }
 
+// hasNonWhitespace reports whether s contains a rune that is not Unicode
+// whitespace. It matches strings.TrimSpace(s) != "" while scanning bytes for
+// the overwhelmingly common ASCII case.
+func hasNonWhitespace(s string) bool {
+	for i := 0; i < len(s); {
+		c := s[i]
+		if c < utf8.RuneSelf {
+			if !isASCIIWhitespace(c) {
+				return true
+			}
+			i++
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if !unicode.IsSpace(r) {
+			return true
+		}
+		i += size
+	}
+	return false
+}
+
 // Determine whether element has any children block level elements.
 func hasChildBlockElement(element *html.Node) bool {
 	for n := element.FirstChild; n != nil; n = n.NextSibling {
-		if slices.Contains(divToPElemns, tagName(n)) || hasChildBlockElement(n) {
+		if n.Type == html.ElementNode && isDivToPElemTag(n.Data) {
 			return true
 		}
+		// Text and comment nodes have no children; skip recursing into them.
+		if n.FirstChild != nil && hasChildBlockElement(n) {
+			return true
+		}
+	}
+	return false
+}
+
+// isDivToPElemTag matches divToPElemns for parsed trees, whose element names
+// x/net/html stores lower-cased.
+func isDivToPElemTag(data string) bool {
+	switch data {
+	case "blockquote", "dl", "div", "img", "ol", "p", "pre", "table", "ul":
+		return true
 	}
 	return false
 }
@@ -1862,7 +1934,7 @@ func isPhrasingContent(n *html.Node) bool {
 }
 
 func isWhitespace(n *html.Node) bool {
-	return (n.Type == html.TextNode && len(strings.TrimSpace(n.Data)) == 0) ||
+	return (n.Type == html.TextNode && !hasNonWhitespace(n.Data)) ||
 		(n.Type == html.ElementNode && tagName(n) == "BR")
 }
 
@@ -1918,13 +1990,40 @@ func getInnerText(e *html.Node, normalizeSpaces bool) string {
 	return text
 }
 
-// articleCommaCount matches the comma variants in the Readability regexp.
-func articleCommaCount(s string) int {
+// subtreeTextStats returns the UTF-16 length of getInnerText(n, true) and the
+// number of commas in that text without materializing either. Whitespace
+// normalization never removes or adds commas, so counting them during the
+// same walk matches articleCommaCount(getInnerText(n, true)).
+func subtreeTextStats(n *html.Node) (length int, commas int) {
+	var c normalizedTextCounter
+	var visit func(*html.Node)
+	visit = func(node *html.Node) {
+		if node.Type == html.TextNode {
+			c.add(node.Data)
+			commas += commaCount(node.Data)
+		}
+		for child := node.FirstChild; child != nil; child = child.NextSibling {
+			visit(child)
+		}
+	}
+	if n != nil {
+		visit(n)
+	}
+	return c.length, commas
+}
+
+// commaCount matches the comma variants in the Readability regexp.
+func commaCount(s string) int {
 	count := strings.Count(s, ",")
-	for _, ch := range s {
-		switch ch {
-		case '\u060c', '\ufe50', '\ufe10', '\ufe11', '\u2e41', '\u2e34', '\u2e32', '\uff0c':
-			count++
+	for i := 0; i < len(s); i++ {
+		if s[i] >= utf8.RuneSelf {
+			for _, ch := range s[i:] {
+				switch ch {
+				case '\u060c', '\ufe50', '\ufe10', '\ufe11', '\u2e41', '\u2e34', '\u2e32', '\uff0c':
+					count++
+				}
+			}
+			break
 		}
 	}
 	return count
@@ -1940,9 +2039,16 @@ func isPresentationalAttribute(name string) bool {
 		"frame", "hspace", "rules", "style", "valign", "vspace":
 		return true
 	}
-	for _, candidate := range presentationalAttribute {
-		if attributeNameEqual(name, candidate) {
-			return true
+	// The switch above already decided every pure lower-case ASCII name.
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if (c >= 'A' && c <= 'Z') || c >= utf8.RuneSelf {
+			for _, candidate := range presentationalAttribute {
+				if attributeNameEqual(name, candidate) {
+					return true
+				}
+			}
+			return false
 		}
 	}
 	return false
@@ -1959,9 +2065,16 @@ func (r *extractor) cleanStyles(e *html.Node) {
 	removeSize := slices.Contains(deprecatedSizeAttributeElems, tagName(e))
 	attrs := e.Attr[:0]
 	for _, attr := range e.Attr {
-		if isPresentationalAttribute(attr.Key) || removeSize &&
-			(attributeNameEqual(attr.Key, "width") || attributeNameEqual(attr.Key, "height")) {
+		key := attr.Key
+		if isPresentationalAttribute(key) {
 			continue
+		}
+		if removeSize {
+			if key == "width" || key == "height" ||
+				(attrKeyNeedsFold(key) &&
+					(attributeNameEqual(key, "width") || attributeNameEqual(key, "height"))) {
+				continue
+			}
 		}
 		attrs = append(attrs, attr)
 	}
@@ -2030,6 +2143,9 @@ type normalizedTextCounter struct {
 }
 
 func (c *normalizedTextCounter) add(s string) {
+	// Keep the running state in registers for the duration of the scan; the
+	// receiver fields are only written back at the end.
+	length, pending, asciiRun, started := c.length, c.pending, c.asciiRun, c.started
 	for i := 0; i < len(s); {
 		// Consume the common run of printable, non-space ASCII in one batch.
 		// This avoids rune decoding and five whitespace comparisons per byte.
@@ -2038,11 +2154,11 @@ func (c *normalizedTextCounter) add(s string) {
 			for i < len(s) && s[i] >= '!' && s[i] < utf8.RuneSelf {
 				i++
 			}
-			if c.started {
-				c.length += c.pending
+			if started {
+				length += pending
 			}
-			c.length += i - start
-			c.pending, c.asciiRun, c.started = 0, 0, true
+			length += i - start
+			pending, asciiRun, started = 0, 0, true
 			continue
 		}
 
@@ -2050,10 +2166,10 @@ func (c *normalizedTextCounter) add(s string) {
 		// commonly contains long indentation runs, and processing those a byte
 		// at a time dominated normalized text accounting on large fixtures.
 		if isASCIIWhitespace(s[i]) {
-			if c.asciiRun == 0 {
-				c.pending++
+			if asciiRun == 0 {
+				pending++
 			}
-			c.asciiRun = 1
+			asciiRun = 1
 			i++
 			for i < len(s) && isASCIIWhitespace(s[i]) {
 				i++
@@ -2072,20 +2188,21 @@ func (c *normalizedTextCounter) add(s string) {
 		// leading/trailing trimming and internal length stay consistent with
 		// getInnerText.
 		if unicode.IsSpace(ch) {
-			c.pending++
-			c.asciiRun = 0
+			pending++
+			asciiRun = 0
 			continue
 		}
-		if c.started {
-			c.length += c.pending
+		if started {
+			length += pending
 		}
-		c.pending, c.asciiRun = 0, 0
-		c.length++
+		pending, asciiRun = 0, 0
+		length++
 		if ch > 0xffff {
-			c.length++
+			length++
 		}
-		c.started = true
+		started = true
 	}
+	c.length, c.pending, c.asciiRun, c.started = length, pending, asciiRun, started
 }
 
 // normalizedTextLength returns the UTF-16 length of getInnerText(n, true)
@@ -2481,19 +2598,11 @@ func (r *extractor) cleanConditionally(e *html.Node, tag string) {
 	// TODO: Consider taking into account original contentScore here.
 
 	r.removeNodes(getAllNodesWithTag(e, tag), func(n *html.Node) bool {
-		// Candidate subtrees overlap heavily. Gather text length, punctuation,
-		// descendant counts, heading/list text, and embeds in one pass.
-		stats := r.gatherConditionalStats(n)
-		nodeTextLength := stats.textLength
-
-		// First check if this node IS data table, in which case don't remove it.
+		// Run every check that does not need descendant statistics first;
+		// gatheringConditionalStats walks the whole candidate subtree and is
+		// the dominant cost when many overlapping candidates survive.
 		var isDataTable = func(t *html.Node) bool {
 			return r.nodeState[t] != nil && r.data(t).isDataTable
-		}
-
-		var isList = (tag == "ul" || tag == "ol")
-		if !isList {
-			isList = float64(stats.listTextLength)/float64(nodeTextLength) > 0.9
 		}
 
 		if tag == "table" && isDataTable(n) {
@@ -2513,10 +2622,16 @@ func (r *extractor) cleanConditionally(e *html.Node, tag string) {
 
 		r.logDebug("Cleaning Conditionally", "node", n)
 
-		var contentScore = 0.0
-
-		if weight+contentScore < 0 {
+		if weight < 0 {
 			return true
+		}
+
+		stats := r.gatherConditionalStats(n)
+		nodeTextLength := stats.textLength
+
+		var isList = (tag == "ul" || tag == "ol")
+		if !isList {
+			isList = float64(stats.listTextLength)/float64(nodeTextLength) > 0.9
 		}
 
 		if stats.commas < 10 {
