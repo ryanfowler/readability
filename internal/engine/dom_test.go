@@ -88,6 +88,28 @@ func TestDecodeHTML(t *testing.T) {
 	}
 }
 
+func TestLinkDensityUsesCachedTextLength(t *testing.T) {
+	doc, err := parseHTML(`<html><body><div>Alpha <a href="/story">beta</a> gamma</div></body></html>`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	div := findElement(doc, "div")
+	want := 4.0 / 16.0
+
+	withoutCache := &extractor{nodeState: make(map[*html.Node]*nodeData), textLengths: make(map[*html.Node]int)}
+	if got := withoutCache.getLinkDensity(div); got != want {
+		t.Fatalf("uncached link density = %v, want %v", got, want)
+	}
+
+	withCache := &extractor{
+		nodeState:   make(map[*html.Node]*nodeData),
+		textLengths: map[*html.Node]int{div: normalizedTextLength(div)},
+	}
+	if got := withCache.getLinkDensity(div); got != want {
+		t.Fatalf("cached link density = %v, want %v", got, want)
+	}
+}
+
 func TestNormalizedTextLengthMatchesInnerText(t *testing.T) {
 	tests := []string{
 		`<p>  Alpha

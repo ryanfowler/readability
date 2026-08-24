@@ -89,6 +89,7 @@ type extractor struct {
 	documentURI     string
 	baseURI         string
 	nodeState       map[*html.Node]*nodeData
+	textLengths     map[*html.Node]int
 	articleTitle    string
 	articleByline   string
 	articleDir      string
@@ -120,6 +121,7 @@ func newExtractor(doc *html.Node, reset func() *html.Node, uri string, options e
 		doc:           doc,
 		documentURI:   uri,
 		nodeState:     make(map[*html.Node]*nodeData),
+		textLengths:   make(map[*html.Node]int),
 	}
 
 	r.body = findElement(r.doc, "body")
@@ -920,6 +922,7 @@ func (r *extractor) grabArticle(page *html.Node) *html.Node {
 		// Scores and table classification are local to this attempt. On retries
 		// resetDocumentForRetry replaces the entire tree with fresh working nodes.
 		clear(r.nodeState)
+		clear(r.textLengths)
 		r.logDebug("Starting grabArticle loop")
 		var stripUnlikelyCandidates = r.flagIsActive(flagStripUnlikelys)
 
@@ -1075,6 +1078,11 @@ func (r *extractor) grabArticle(page *html.Node) *html.Node {
 			if innerTextLength < 25 {
 				continue
 			}
+			// Candidate scoring and link-density calculation both need the
+			// normalized length of scoreable nodes. Keep it in a per-attempt
+			// cache so the later candidate pass does not rescan overlapping
+			// subtrees or create node state for non-candidates.
+			r.textLengths[elementToScore] = innerTextLength
 
 			// Exclude nodes with no ancestor.
 			// Keep the bounded ancestor list on the stack. This loop runs once
@@ -2095,6 +2103,7 @@ func (r *extractor) getLinkDensity(element *html.Node) float64 {
 	// implementation first walked the whole subtree, materialized a slice of
 	// links, and then walked each link subtree again.
 	var total normalizedTextCounter
+	cachedLength, cached := r.textLengths[element]
 	// Nested anchors are invalid HTML and the parser normally prevents them.
 	// Keep the common stack inline so density calculation remains allocation-free.
 	var linkStack [4]linkTextCounter
@@ -2111,7 +2120,9 @@ func (r *extractor) getLinkDensity(element *html.Node) float64 {
 			links = append(links, linkTextCounter{coefficient: coefficient})
 		}
 		if n.Type == html.TextNode {
-			total.add(n.Data)
+			if !cached {
+				total.add(n.Data)
+			}
 			for i := range links {
 				links[i].text.add(n.Data)
 			}
@@ -2126,6 +2137,9 @@ func (r *extractor) getLinkDensity(element *html.Node) float64 {
 		}
 	}
 	visit(element)
+	if cached {
+		total.length = cachedLength
+	}
 	if total.length == 0 {
 		return 0
 	}
@@ -2138,14 +2152,15 @@ type linkTextCounter struct {
 }
 
 type normalizedTextCounter struct {
-	length, pending, asciiRun int
-	started                   bool
+	length, pending int
+	asciiRun        bool
+	started         bool
 }
 
 func (c *normalizedTextCounter) add(s string) {
 	// Keep the running state in registers for the duration of the scan; the
 	// receiver fields are only written back at the end.
-	length, pending, asciiRun, started := c.length, c.pending, c.asciiRun, c.started
+	length, pending, started, asciiRun := c.length, c.pending, c.started, c.asciiRun
 	for i := 0; i < len(s); {
 		// Consume the common run of printable, non-space ASCII in one batch.
 		// This avoids rune decoding and five whitespace comparisons per byte.
@@ -2158,7 +2173,7 @@ func (c *normalizedTextCounter) add(s string) {
 				length += pending
 			}
 			length += i - start
-			pending, asciiRun, started = 0, 0, true
+			pending, started, asciiRun = 0, true, false
 			continue
 		}
 
@@ -2166,10 +2181,10 @@ func (c *normalizedTextCounter) add(s string) {
 		// commonly contains long indentation runs, and processing those a byte
 		// at a time dominated normalized text accounting on large fixtures.
 		if isASCIIWhitespace(s[i]) {
-			if asciiRun == 0 {
+			if !asciiRun {
 				pending++
 			}
-			asciiRun = 1
+			asciiRun = true
 			i++
 			for i < len(s) && isASCIIWhitespace(s[i]) {
 				i++
@@ -2189,13 +2204,13 @@ func (c *normalizedTextCounter) add(s string) {
 		// getInnerText.
 		if unicode.IsSpace(ch) {
 			pending++
-			asciiRun = 0
+			asciiRun = false
 			continue
 		}
 		if started {
 			length += pending
 		}
-		pending, asciiRun = 0, 0
+		pending, asciiRun = 0, false
 		length++
 		if ch > 0xffff {
 			length++
