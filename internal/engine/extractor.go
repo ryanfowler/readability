@@ -918,7 +918,7 @@ func (r *extractor) grabArticle(page *html.Node) *html.Node {
 
 	for {
 		// Scores and table classification are local to this attempt. On retries
-		// resetDocumentForRetry replaces the entire tree with freshly parsed nodes.
+		// resetDocumentForRetry replaces the entire tree with fresh working nodes.
 		clear(r.nodeState)
 		r.logDebug("Starting grabArticle loop")
 		var stripUnlikelyCandidates = r.flagIsActive(flagStripUnlikelys)

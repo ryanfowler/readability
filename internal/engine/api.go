@@ -215,9 +215,16 @@ func parseHTMLReaderWithRestore(input io.Reader) (*html.Node, func() *html.Node,
 			return nil, nil, ErrNoBody
 		}
 	}
+	// Retries mutate each working tree. Parse the source once on the first
+	// retry, keep that tree as an immutable snapshot, and clone it for later
+	// attempts. Re-parsing the source for every retry makes forced-retry parses
+	// pay the HTML tokenizer cost up to four times.
+	var retrySnapshot *html.Node
 	restore := func() *html.Node {
-		doc, _ := html.Parse(replay())
-		return doc
+		if retrySnapshot == nil {
+			retrySnapshot, _ = html.Parse(replay())
+		}
+		return cloneTree(retrySnapshot)
 	}
 	return doc, restore, nil
 }
