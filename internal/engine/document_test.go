@@ -142,6 +142,19 @@ func TestParseReturnsReaderError(t *testing.T) {
 	}
 }
 
+func TestParseRetryRestoresIndependentTrees(t *testing.T) {
+	_, restore, err := parseHTMLReaderWithRestore(strings.NewReader(`<html><body><article>retry source</article></body></html>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := restore()
+	findElement(first, "body").Data = "changed"
+	second := restore()
+	if got := findElement(second, "body").Data; got != "body" {
+		t.Fatalf("restored body tag = %q, want body", got)
+	}
+}
+
 func TestParseReplaysReaderForRetries(t *testing.T) {
 	const prefix = "ignored prefix"
 	const source = `<html><body><article><p>Short but non-empty article text.</p></article></body></html>`
